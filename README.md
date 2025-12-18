@@ -1,47 +1,34 @@
 
 # PBN Hunter Pro - Domain Analyzer
 
-**PBN Hunter Pro** là một công cụ phân tích và lọc tên miền hết hạn (Expired Domains) chuyên sâu dành cho các chuyên gia SEO. Công cụ giúp tối ưu hóa quy trình xây dựng hệ thống vệ tinh (PBN) hoặc tìm kiếm tên miền cũ chất lượng cao.
+Công cụ phân tích và lọc tên miền hết hạn (Expired Domains) chuyên sâu với quy trình lọc đa tầng: Archive.org, Ahrefs, Majestic và Google Penalty.
 
 ## 🚀 Tính Năng Chính
-- **Thu thập Domain (Crawl):** Tích hợp giả lập quét Archive.org để tìm domain có lịch sử.
-- **Lọc Chỉ Số (Filter):** Lọc theo DR, UR, RD (Ahrefs) và TF, CF (Majestic).
-- **Kiểm Tra Penalty:** Tự động check Google Index và Safe Browsing.
-- **Phân Tích AI (Gemini):** Sử dụng trí tuệ nhân tạo để đánh giá chất lượng lô domain.
-- **Quản Lý Người Dùng:** Hệ thống đăng ký, đăng nhập và Access Key dành cho Admin.
+- **Quét Đa Nguồn:** Tự động lọc các domain có lịch sử trên Archive.org và còn khả dụng (chưa bị mua).
+- **Lọc Chỉ Số SEO:** Lọc DR, UR, RD, TF, CF theo yêu cầu.
+- **Check Penalty:** Kiểm tra tình trạng Index và Google Safe Browsing.
+- **AI Audit:** Sử dụng Gemini AI để đánh giá tiềm năng SEO của lô domain.
+- **Hệ Thống Key:** Quản lý truy cập bằng Key kích hoạt hoặc Đồng bộ thiết bị.
 
-## 🛠 Cài Đặt Local
+## 🛠 Cài Đặt & Triển Khai
 
-1.  **Clone dự án:**
-    ```bash
-    git clone [URL_REPO]
-    cd pbn-hunter-pro
-    ```
+### 1. Triển khai lên Vercel
+- Đẩy mã nguồn lên GitHub.
+- Kết nối Vercel với Repository.
+- Thêm **Environment Variable**: `API_KEY` = [Khóa Gemini của bạn].
+- Nhấn **Deploy**.
 
-2.  **Cài đặt dependencies:**
-    ```bash
-    npm install
-    ```
+### 2. Chạy Local
+```bash
+npm install
+npm run dev
+```
 
-3.  **Cấu hình API Key:**
-    Tạo tệp `.env` tại thư mục gốc và thêm key Gemini của bạn:
-    ```env
-    VITE_API_KEY=your_google_gemini_api_key_here
-    ```
-
-4.  **Chạy dự án:**
-    ```bash
-    npm run dev
-    ```
-
-## 📋 Quy Trình Hoạt Động
-1.  **Bước 1:** Nhập từ khóa để quét các domain có lịch sử trên Archive.org.
-2.  **Bước 2:** Thiết lập các thông số SEO mong muốn (DR, TF, Giá).
-3.  **Bước 3:** Hệ thống kiểm tra tình trạng index và án phạt của Google.
-4.  **Bước 4:** Xem danh sách kết quả, yêu cầu AI phân tích và xuất file CSV.
-
-## ⚖️ Giấy Phép
-Dự án được phát triển nhằm mục đích nghiên cứu và hỗ trợ cộng đồng SEO.
+## 📋 Quy Trình Hoạt Động Chi Tiết
+1. **Thu Domain:** Hệ thống quét các nguồn tên miền hết hạn. Chỉ những domain có dữ liệu trên Wayback Machine (Archive.org) và đang ở trạng thái tự do (Available) mới được đưa vào danh sách.
+2. **Lọc Chỉ Số:** Người dùng tùy chỉnh bộ lọc (DR > 10, TF > 10, v.v.).
+3. **Check Penalty:** Hệ thống giả lập kiểm tra các yếu tố rủi ro của Google.
+4. **Kết quả:** Xuất danh sách sạch ra CSV hoặc nhờ AI phân tích chiến lược sử dụng.
 
 ---
 *Phát triển bởi Đỗ Ngọc Thành.*
