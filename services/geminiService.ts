@@ -31,8 +31,9 @@ export const analyzeDomainBatch = async (
   `;
 
   try {
+    // Fix: Using 'gemini-3-flash-preview' for basic text task as per guidelines
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
     });
     return response.text || "Không thể tạo báo cáo.";
@@ -45,8 +46,9 @@ export const analyzeDomainBatch = async (
 export const generateMockDomains = async (seedKeyword: string): Promise<string[]> => {
     // Helper to generate interesting looking domains for the simulation
     try {
+         // Fix: Using 'gemini-3-flash-preview' for basic text task as per guidelines
          const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: `Tạo danh sách 5 tên miền ngẫu nhiên trông giống domain cũ đã hết hạn liên quan đến từ khóa "${seedKeyword || 'tech'}". Chỉ trả về tên miền, mỗi dòng 1 cái, không có số thứ tự. Ví dụ: techguru.com`,
           });
           return response.text?.split('\n').filter(Boolean) || [];
