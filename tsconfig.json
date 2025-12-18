@@ -11,13 +11,13 @@
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-adjacent",
+    "jsx": "react-jsx",
     "types": ["node"]
   },
-  "include": ["index.tsx", "vite.config.ts", "services/**/*.ts", "components/**/*.tsx", "types.ts", "App.tsx"],
+  "include": ["index.tsx", "services/**/*.ts", "components/**/*.tsx", "types.ts", "App.tsx"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
