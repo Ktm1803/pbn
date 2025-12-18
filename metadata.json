@@ -1,0 +1,5 @@
+{
+  "name": "PBN Hunter Pro - Domain Analyzer",
+  "description": "Công cụ phân tích và lọc tên miền hết hạn (Expired Domains) chuyên sâu với quy trình 4 bước: Thu thập, Lọc chỉ số (Ahrefs/Majestic), Kiểm tra Penalty và Xuất báo cáo.",
+  "requestFramePermissions": []
+}
