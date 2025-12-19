@@ -15,64 +15,72 @@ export enum DomainStatus {
   Ignored = 'Ignored',
 }
 
+export type MarketplaceType = 'SAV' | 'Namecheap' | 'Registry';
+
 export interface FilterConfig {
   minDR: number;
   minUR: number;
   minRD: number;
   minTF: number;
   minCF: number;
-  maxPrice: number; // Added max price filter
+  maxPrice: number;
   excludeAdult: boolean;
   excludeGambling: boolean;
-  allowedTLDs: string[]; // List of allowed TLDs (empty = all)
+  allowedTLDs: string[];
 }
 
 export interface DomainEntity {
   id: string;
   url: string;
-  dr: number; // Domain Rating
-  ur: number; // URL Rating
-  rd: number; // Referring Domains
-  tf: number; // Trust Flow
-  cf: number; // Citation Flow
+  dr: number;
+  ur: number;
+  rd: number;
+  tf: number;
+  cf: number;
+  traffic: number; 
   anchorStatus: 'Clean' | 'Spam' | 'Mixed';
   indexed: boolean;
   waybackClean: boolean;
+  archiveSnapshots: number; 
+  archiveFirstSeen: number; 
   status: DomainStatus;
-  checkProgress: number; // 0-100
-  age: number; // Years
+  checkProgress: number;
+  age: number;
   isExpired: boolean;
-  price: number; // Estimated price in USD
+  price: number;
+  marketplace: MarketplaceType;
+  isAuction: boolean;
+  auctionEndsAt?: number;
+  bidCount?: number;
 }
 
-export interface Stats {
-  totalFound: number;
-  passedFilters: number;
-  cleanDomains: number;
+export interface BugReport {
+  id: string;
+  email: string;
+  content: string;
+  createdAt: number;
+  status: 'new' | 'resolved';
 }
-
-// --- AUTH & SUBSCRIPTION TYPES ---
 
 export type PlanType = '1_month' | '6_months' | '1_year';
 
 export interface User {
   email: string;
-  password: string; // In a real app, this should be hashed
+  password: string;
   role: 'admin' | 'user';
   subscriptionStatus: 'active' | 'inactive' | 'pending';
   plan?: PlanType;
-  paymentCode: string; // Unique code for transfer
-  expiryDate?: number; // Timestamp
+  paymentCode: string;
+  expiryDate?: number;
   createdAt: number;
 }
 
-// New Interface for Access Keys
 export interface AccessKey {
   code: string;
   plan: PlanType;
   isUsed: boolean;
   createdAt: number;
-  usedBy?: string; // Email of the user who redeemed it
+  usedBy?: string;
   usedAt?: number;
 }
 

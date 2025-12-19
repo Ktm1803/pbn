@@ -1,17 +1,17 @@
 
-import { User, PlanType, PLANS, AccessKey } from "../types";
+import { User, PlanType, PLANS, AccessKey, BugReport } from "../types";
 
 const USERS_KEY = 'pbn_hunter_users';
 const KEYS_KEY = 'pbn_hunter_access_keys';
 const CURRENT_USER_KEY = 'pbn_hunter_current_user';
+const BUGS_KEY = 'pbn_hunter_bug_reports';
 
-// Initialize System Accounts (Admins & Default Users)
+// Initialize System Accounts
 const initSystemAccounts = () => {
     const stored = localStorage.getItem(USERS_KEY);
     const users: User[] = stored ? JSON.parse(stored) : [];
     
     const defaultAccounts: User[] = [
-        // Original Admin
         {
             email: "thanhfa2k2@gmail.com",
             password: "Ngocthanh@1",
@@ -21,7 +21,6 @@ const initSystemAccounts = () => {
             createdAt: Date.now(),
             expiryDate: 9999999999999
         },
-        // Requested Admin
         {
             email: "dev@cdk.com",
             password: "Ngocthanh@1",
@@ -31,7 +30,6 @@ const initSystemAccounts = () => {
             createdAt: Date.now(),
             expiryDate: 9999999999999
         },
-        // Requested Permanent User
         {
             email: "cdk@cdk.com",
             password: "admin123",
@@ -58,7 +56,7 @@ const initSystemAccounts = () => {
 };
 
 export const getUsers = (): User[] => {
-    initSystemAccounts(); // Always ensure system accounts exist when fetching users
+    initSystemAccounts();
     const stored = localStorage.getItem(USERS_KEY);
     return stored ? JSON.parse(stored) : [];
 };
@@ -143,20 +141,38 @@ export const loginWithAccessKey = (code: string): { success: boolean, user?: Use
     return { success: true, user: newUser, message: "Kích hoạt Key thành công!" };
 };
 
-// --- EXISTING FUNCTIONS ---
-
-export const importUsers = (jsonString: string): { success: boolean, message: string } => {
-    try {
-        const parsed = JSON.parse(jsonString);
-        if (Array.isArray(parsed) && parsed.every(u => u.email && u.role)) {
-            saveUsers(parsed);
-            return { success: true, message: "Khôi phục dữ liệu thành công!" };
-        }
-        return { success: false, message: "File backup không hợp lệ." };
-    } catch (e) {
-        return { success: false, message: "Lỗi định dạng JSON." };
-    }
+// --- BUG REPORTS ---
+export const getBugReports = (): BugReport[] => {
+    const stored = localStorage.getItem(BUGS_KEY);
+    return stored ? JSON.parse(stored) : [];
 };
+
+export const submitBugReport = (email: string, content: string) => {
+    const reports = getBugReports();
+    const newReport: BugReport = {
+        id: Math.random().toString(36).substr(2, 9),
+        email,
+        content,
+        createdAt: Date.now(),
+        status: 'new'
+    };
+    reports.push(newReport);
+    localStorage.setItem(BUGS_KEY, JSON.stringify(reports));
+};
+
+export const resolveBugReport = (id: string) => {
+    const reports = getBugReports();
+    const updated = reports.map(r => r.id === id ? { ...r, status: 'resolved' as const } : r);
+    localStorage.setItem(BUGS_KEY, JSON.stringify(updated));
+};
+
+export const deleteBugReport = (id: string) => {
+    const reports = getBugReports();
+    const filtered = reports.filter(r => r.id !== id);
+    localStorage.setItem(BUGS_KEY, JSON.stringify(filtered));
+};
+
+// --- AUTH CORE ---
 
 export const login = (email: string, password: string): User | null => {
     const users = getUsers();
@@ -213,7 +229,6 @@ export const getCurrentUser = (): User | null => {
     
     if (!freshUser) return null;
 
-    // Auto-check for subscription expiry
     if (freshUser.expiryDate && Date.now() > freshUser.expiryDate && freshUser.subscriptionStatus === 'active') {
         const updatedUser = { ...freshUser, subscriptionStatus: 'inactive' as const };
         const updatedUsers = users.map(u => u.email === updatedUser.email ? updatedUser : u);
@@ -225,18 +240,6 @@ export const getCurrentUser = (): User | null => {
     return freshUser;
 };
 
-export const requestSubscription = (email: string, plan: PlanType) => {
-    const users = getUsers();
-    const updatedUsers = users.map(u => {
-        if (u.email === email) {
-            return { ...u, plan, subscriptionStatus: 'pending' as const };
-        }
-        return u;
-    });
-    saveUsers(updatedUsers);
-};
-
-// Admin functions
 export const approveUser = (email: string) => {
     const users = getUsers();
     const updatedUsers = users.map(u => {
@@ -268,7 +271,6 @@ export const revokeUser = (email: string) => {
     saveUsers(updatedUsers);
 }
 
-// Sync Features
 export const generateSyncCode = (email: string): string => {
     const users = getUsers();
     const user = users.find(u => u.email === email);
@@ -280,25 +282,38 @@ export const loginWithSyncCode = (code: string): { success: boolean, user?: User
     try {
         const decoded = atob(code);
         const user: User = JSON.parse(decoded);
-        
-        if (!user.email || !user.role) {
-             return { success: false, message: "Mã đồng bộ không hợp lệ." };
-        }
-
         const users = getUsers();
         const existingIndex = users.findIndex(u => u.email === user.email);
-        
-        if (existingIndex >= 0) {
-            users[existingIndex] = user;
-        } else {
-            users.push(user);
-        }
-        
+        if (existingIndex >= 0) users[existingIndex] = user;
+        else users.push(user);
         saveUsers(users);
         localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
         return { success: true, user, message: "Đồng bộ tài khoản thành công!" };
-
     } catch (e) {
         return { success: false, message: "Mã không đúng định dạng." };
     }
+};
+
+export const importUsers = (jsonString: string): { success: boolean, message: string } => {
+    try {
+        const parsed = JSON.parse(jsonString);
+        if (Array.isArray(parsed)) {
+            saveUsers(parsed);
+            return { success: true, message: "Khôi phục dữ liệu thành công!" };
+        }
+        return { success: false, message: "File backup không hợp lệ." };
+    } catch (e) {
+        return { success: false, message: "Lỗi định dạng JSON." };
+    }
+};
+
+export const requestSubscription = (email: string, plan: PlanType) => {
+    const users = getUsers();
+    const updatedUsers = users.map(u => {
+        if (u.email === email) {
+            return { ...u, plan, subscriptionStatus: 'pending' as const };
+        }
+        return u;
+    });
+    saveUsers(updatedUsers);
 };
