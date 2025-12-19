@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User, PLANS, PlanType, AccessKey, BugReport } from '../types';
-import { login, register, requestSubscription, getUsers, approveUser, revokeUser, logout, importUsers, loginWithSyncCode, generateSyncCode, createAccessKey, getAccessKeys, deleteAccessKey, loginWithAccessKey, getBugReports, resolveBugReport, deleteBugReport } from '../services/authService';
-import { Lock, User as UserIcon, Check, CreditCard, Shield, LogOut, Clock, AlertCircle, RefreshCw, Globe, ArrowRight, Download, Upload, Database, Smartphone, Copy, Key, Trash2, Plus, MessageSquare, Send, Bug } from 'lucide-react';
+import { login, register, requestSubscription, getUsers, approveUser, revokeUser, logout, importUsers, loginWithSyncCode, generateSyncCode, createAccessKey, getAccessKeys, deleteAccessKey, loginWithAccessKey, getBugReports, resolveBugReport, deleteBugReport, toggleLockUser } from '../services/authService';
+// Added missing PlusCircle import from lucide-react
+import { Lock, User as UserIcon, Check, CreditCard, Shield, LogOut, Clock, AlertCircle, RefreshCw, Globe, ArrowRight, Download, Upload, Database, Smartphone, Copy, Key, Trash2, Plus, MessageSquare, Send, Bug, UserX, UserCheck, PlusCircle } from 'lucide-react';
 
 // --- LOGIN / REGISTER FORM ---
 export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) => {
@@ -18,9 +19,9 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
         setError('');
         
         if (mode === 'login') {
-            const user = login(email, password);
-            if (user) onLogin(user);
-            else setError("Email hoặc mật khẩu không đúng.");
+            const res = login(email, password);
+            if (res.success && res.user) onLogin(res.user);
+            else setError(res.message);
         } else if (mode === 'register') {
             const res = register(email, password);
             if (res.success) {
@@ -55,11 +56,11 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
 
             <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl w-full max-w-md relative z-10 backdrop-blur-sm">
                 <div className="text-center mb-8">
-                    <div className="w-16 h-16 bg-blue-600 rounded-xl mx-auto flex items-center justify-center mb-4 shadow-lg shadow-blue-600/40">
+                    <div className="w-16 h-16 bg-blue-600 rounded-xl mx-auto flex items-center justify-center mb-4 shadow-lg shadow-blue-600/40 overflow-hidden border border-white/10">
                         <Lock className="text-white" size={32} />
                     </div>
-                    <h2 className="text-3xl font-bold text-white mb-2">PBN Hunter Pro</h2>
-                    <p className="text-slate-400">Công cụ phân tích tên miền chuyên sâu</p>
+                    <h2 className="text-3xl font-bold text-white mb-2 tracking-tighter">PBN Hunter Pro</h2>
+                    <p className="text-slate-400 text-sm">Công cụ phân tích tên miền chuyên sâu</p>
                 </div>
 
                 {error && (
@@ -91,7 +92,7 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
 
                     {mode === 'key' && (
                          <div>
-                            <label className="block text-slate-400 text-sm font-medium mb-1">Nhập Key</label>
+                            <label className="block text-slate-400 text-sm font-medium mb-1">Nhập Key kích hoạt</label>
                             <div className="relative">
                                 <input type="text" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono pl-10 uppercase" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="KEY-XXXX-XXXX" />
                                 <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
@@ -100,7 +101,7 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                     )}
 
                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/50 mt-2">
-                        Tiếp tục
+                        {mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : 'Kích hoạt'}
                     </button>
                 </form>
 
@@ -128,7 +129,6 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
     const [refresh, setRefresh] = useState(0);
     const [tab, setTab] = useState<'users' | 'keys' | 'bugs'>('users');
     const [selectedPlanForNewKey, setSelectedPlanForNewKey] = useState<PlanType>('1_month');
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         const interval = setInterval(() => {
@@ -164,46 +164,88 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
         }
     };
 
+    const handleToggleLock = (email: string, isLocked: boolean) => {
+        if (confirm(`${isLocked ? 'Mở khóa' : 'Khóa'} tài khoản ${email}?`)) {
+            toggleLockUser(email);
+            setRefresh(r => r+1);
+        }
+    };
+
+    const formatExpiry = (expiry?: number) => {
+        if (!expiry) return "Chưa kích hoạt";
+        if (expiry > 9999999999998) return "Vĩnh viễn";
+        const date = new Date(expiry);
+        const now = Date.now();
+        const diffDays = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+        return `${date.toLocaleDateString()} (${diffDays > 0 ? `Còn ${diffDays} ngày` : 'Hết hạn'})`;
+    };
+
     return (
         <div className="min-h-screen bg-slate-950 p-6">
-            <header className="flex justify-between items-center mb-8 bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-lg">
+            <header className="flex justify-between items-center mb-8 bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-lg">
                 <div className="flex items-center gap-6">
-                    <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Shield className="text-red-500"/> Admin</h1>
-                    <nav className="flex gap-4">
-                        <button onClick={() => setTab('users')} className={`px-4 py-1 rounded-full text-sm font-bold transition-all ${tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>Người dùng</button>
-                        <button onClick={() => setTab('keys')} className={`px-4 py-1 rounded-full text-sm font-bold transition-all ${tab === 'keys' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>Keys</button>
-                        <button onClick={() => setTab('bugs')} className={`px-4 py-1 rounded-full text-sm font-bold transition-all ${tab === 'bugs' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}>Báo cáo lỗi ({bugs.filter(b => b.status === 'new').length})</button>
+                    <h1 className="text-2xl font-black text-white flex items-center gap-2 tracking-tighter"><Shield className="text-red-500"/> ADMIN PANEL</h1>
+                    <nav className="flex gap-2">
+                        <button onClick={() => setTab('users')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Người dùng</button>
+                        <button onClick={() => setTab('keys')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'keys' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Activation Keys</button>
+                        <button onClick={() => setTab('bugs')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'bugs' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Báo cáo lỗi ({bugs.filter(b => b.status === 'new').length})</button>
                     </nav>
                 </div>
                 <div className="flex items-center gap-3">
-                    <button onClick={onGoToTool} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-bold">Vào Tool</button>
-                    <button onClick={onLogout} className="bg-red-900/80 hover:bg-red-800 text-white p-2 rounded-lg"><LogOut size={16} /></button>
+                    <button onClick={onGoToTool} className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl text-xs font-black shadow-lg shadow-emerald-900/20">Vào Tool</button>
+                    <button onClick={onLogout} className="bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-white p-2.5 rounded-xl border border-slate-700 transition-all"><LogOut size={16} /></button>
                 </div>
             </header>
 
             {tab === 'users' && (
-                <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-xl">
+                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
                     <table className="w-full text-left">
                         <thead>
-                            <tr className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider">
-                                <th className="p-4 border-b border-slate-800">Email</th>
-                                <th className="p-4 border-b border-slate-800">Payment</th>
-                                <th className="p-4 border-b border-slate-800">Trạng thái</th>
-                                <th className="p-4 border-b border-slate-800 text-right">Hành động</th>
+                            <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
+                                <th className="p-6 border-b border-slate-800">Thông tin User</th>
+                                <th className="p-6 border-b border-slate-800">Mã Payment</th>
+                                <th className="p-6 border-b border-slate-800">Thời hạn sử dụng</th>
+                                <th className="p-6 border-b border-slate-800">Trạng thái</th>
+                                <th className="p-6 border-b border-slate-800 text-right">Hành động</th>
                             </tr>
                         </thead>
                         <tbody className="text-sm text-slate-300">
                             {users.filter(u => u.role !== 'admin').map((u) => (
-                                <tr key={u.email} className="border-b border-slate-800 hover:bg-slate-800/50">
-                                    <td className="p-4 font-medium text-white">{u.email}</td>
-                                    <td className="p-4 font-mono text-yellow-400">{u.paymentCode}</td>
-                                    <td className="p-4">
-                                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${u.subscriptionStatus === 'active' ? 'bg-green-900/20 text-green-400' : u.subscriptionStatus === 'pending' ? 'bg-yellow-900/20 text-yellow-400 animate-pulse' : 'bg-slate-800 text-slate-500'}`}>
-                                            {u.subscriptionStatus.toUpperCase()}
-                                        </span>
+                                <tr key={u.email} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${u.isLocked ? 'opacity-60 grayscale' : ''}`}>
+                                    <td className="p-6">
+                                        <div className="font-black text-white">{u.email}</div>
+                                        <div className="text-[10px] text-slate-500 font-mono mt-1">ID: {btoa(u.email).slice(0, 8)}</div>
                                     </td>
-                                    <td className="p-4 text-right">
-                                        {u.subscriptionStatus === 'pending' && <button onClick={() => handleApprove(u.email)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-bold">Duyệt</button>}
+                                    <td className="p-6 font-mono text-yellow-500 font-bold">{u.paymentCode}</td>
+                                    <td className="p-6">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
+                                            <Clock size={14} className="text-slate-500"/>
+                                            {formatExpiry(u.expiryDate)}
+                                        </div>
+                                    </td>
+                                    <td className="p-6">
+                                        <div className="flex flex-col gap-1.5">
+                                            <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black w-fit uppercase tracking-tighter ${u.subscriptionStatus === 'active' ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/50' : u.subscriptionStatus === 'pending' ? 'bg-yellow-950/40 text-yellow-400 border border-yellow-900/50 animate-pulse' : 'bg-slate-800 text-slate-500 border border-slate-700'}`}>
+                                                {u.subscriptionStatus}
+                                            </span>
+                                            {u.isLocked && (
+                                                <span className="bg-red-950/40 text-red-400 border border-red-900/50 px-2.5 py-1 rounded-lg text-[10px] font-black w-fit uppercase tracking-tighter">Bị khóa</span>
+                                            )}
+                                        </div>
+                                    </td>
+                                    <td className="p-6 text-right">
+                                        <div className="flex justify-end gap-2">
+                                            {u.subscriptionStatus === 'pending' && (
+                                                <button onClick={() => handleApprove(u.email)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-1.5 rounded-xl text-[10px] font-black transition-all">Duyệt</button>
+                                            )}
+                                            <button 
+                                                onClick={() => handleToggleLock(u.email, !!u.isLocked)} 
+                                                className={`p-2 rounded-xl transition-all border ${u.isLocked ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50 hover:bg-emerald-900/40' : 'bg-red-900/20 text-red-400 border-red-900/50 hover:bg-red-900/40'}`}
+                                                title={u.isLocked ? "Mở khóa" : "Khóa tài khoản"}
+                                            >
+                                                {u.isLocked ? <UserCheck size={16}/> : <UserX size={16}/>}
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
@@ -213,25 +255,42 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
             )}
 
             {tab === 'keys' && (
-                <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-xl">
-                    <div className="p-4 border-b border-slate-800 flex justify-between items-center">
-                        <h3 className="font-bold text-white">Quản lý Keys</h3>
+                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
+                    <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+                        <h3 className="font-black text-white tracking-tighter">QUẢN LÝ KEY KÍCH HOẠT</h3>
                         <div className="flex gap-2">
-                             <select value={selectedPlanForNewKey} onChange={e => setSelectedPlanForNewKey(e.target.value as PlanType)} className="bg-slate-800 text-white text-xs rounded px-2 py-1 outline-none">
+                             <select value={selectedPlanForNewKey} onChange={e => setSelectedPlanForNewKey(e.target.value as PlanType)} className="bg-slate-800 text-white text-xs rounded-xl px-4 py-2 outline-none font-bold border border-slate-700">
                                 {Object.keys(PLANS).map(p => <option key={p} value={p}>{PLANS[p as PlanType].name}</option>)}
                              </select>
-                             <button onClick={handleCreateKey} className="bg-emerald-600 px-3 py-1 rounded text-xs font-bold text-white">Tạo Key</button>
+                             <button onClick={handleCreateKey} className="bg-blue-600 hover:bg-blue-500 px-5 py-2 rounded-xl text-xs font-black text-white shadow-lg shadow-blue-900/20">Tạo Key Mới</button>
                         </div>
                     </div>
                     <table className="w-full text-left">
+                        <thead>
+                            <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
+                                <th className="p-6 border-b border-slate-800">Mã Key</th>
+                                <th className="p-6 border-b border-slate-800">Gói</th>
+                                <th className="p-6 border-b border-slate-800">Trạng thái</th>
+                                <th className="p-6 border-b border-slate-800 text-right">Xóa</th>
+                            </tr>
+                        </thead>
                         <tbody className="text-sm text-slate-300">
                             {keys.map(k => (
-                                <tr key={k.code} className="border-b border-slate-800 hover:bg-slate-800/50">
-                                    <td className="p-4 font-mono text-yellow-400 font-bold">{k.code}</td>
-                                    <td className="p-4">{PLANS[k.plan].name}</td>
-                                    <td className="p-4">{k.isUsed ? <span className="text-slate-600">Đã dùng ({k.usedBy})</span> : <span className="text-green-500">Chưa dùng</span>}</td>
-                                    <td className="p-4 text-right">
-                                        {!k.isUsed && <button onClick={() => handleDeleteKey(k.code)} className="text-red-500 hover:text-red-400"><Trash2 size={16}/></button>}
+                                <tr key={k.code} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                                    <td className="p-6 font-mono text-blue-400 font-black tracking-widest">{k.code}</td>
+                                    <td className="p-6 font-bold">{PLANS[k.plan].name}</td>
+                                    <td className="p-6">
+                                        {k.isUsed ? (
+                                            <div className="flex flex-col">
+                                                <span className="text-slate-500 text-xs flex items-center gap-1"><UserIcon size={12}/> Đã sử dụng bởi:</span>
+                                                <span className="text-white font-bold text-xs">{k.usedBy}</span>
+                                            </div>
+                                        ) : (
+                                            <span className="text-emerald-500 font-black text-[10px] uppercase flex items-center gap-1"><PlusCircle size={14}/> Sẵn sàng</span>
+                                        )}
+                                    </td>
+                                    <td className="p-6 text-right">
+                                        {!k.isUsed && <button onClick={() => handleDeleteKey(k.code)} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={18}/></button>}
                                     </td>
                                 </tr>
                             ))}
@@ -241,31 +300,37 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
             )}
 
             {tab === 'bugs' && (
-                <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-xl">
+                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
                     <table className="w-full text-left">
                         <thead>
-                            <tr className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider">
-                                <th className="p-4 border-b border-slate-800">Người báo</th>
-                                <th className="p-4 border-b border-slate-800">Nội dung</th>
-                                <th className="p-4 border-b border-slate-800">Thời gian</th>
-                                <th className="p-4 border-b border-slate-800 text-right">Xử lý</th>
+                            <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
+                                <th className="p-6 border-b border-slate-800">Người báo cáo</th>
+                                <th className="p-6 border-b border-slate-800">Nội dung chi tiết</th>
+                                <th className="p-6 border-b border-slate-800">Thời gian gửi</th>
+                                <th className="p-6 border-b border-slate-800 text-right">Hành động</th>
                             </tr>
                         </thead>
                         <tbody className="text-sm text-slate-300">
                             {bugs.map(b => (
-                                <tr key={b.id} className={`border-b border-slate-800 hover:bg-slate-800/50 ${b.status === 'resolved' ? 'opacity-50' : ''}`}>
-                                    <td className="p-4">{b.email}</td>
-                                    <td className="p-4 whitespace-pre-wrap">{b.content}</td>
-                                    <td className="p-4 text-xs font-mono">{new Date(b.createdAt).toLocaleString()}</td>
-                                    <td className="p-4 text-right">
+                                <tr key={b.id} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${b.status === 'resolved' ? 'opacity-40' : ''}`}>
+                                    <td className="p-6 font-bold text-white">{b.email}</td>
+                                    <td className="p-6 whitespace-pre-wrap text-slate-400 text-xs italic">"{b.content}"</td>
+                                    <td className="p-6 text-xs font-mono font-bold text-slate-500">{new Date(b.createdAt).toLocaleString()}</td>
+                                    <td className="p-6 text-right">
                                         <div className="flex justify-end gap-2">
-                                            {b.status === 'new' && <button onClick={() => { resolveBugReport(b.id); setRefresh(r => r+1); }} className="text-emerald-500 hover:text-emerald-400"><Check size={18}/></button>}
-                                            <button onClick={() => { deleteBugReport(b.id); setRefresh(r => r+1); }} className="text-red-500 hover:text-red-400"><Trash2 size={16}/></button>
+                                            {b.status === 'new' && (
+                                                <button onClick={() => { resolveBugReport(b.id); setRefresh(r => r+1); }} className="text-emerald-500 hover:bg-emerald-950/50 p-2 rounded-xl border border-transparent hover:border-emerald-900/50 transition-all"><Check size={20}/></button>
+                                            )}
+                                            <button onClick={() => { deleteBugReport(b.id); setRefresh(r => r+1); }} className="text-slate-600 hover:text-red-400 p-2 rounded-xl transition-all"><Trash2 size={18}/></button>
                                         </div>
                                     </td>
                                 </tr>
                             ))}
-                            {bugs.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-slate-500 italic">Chưa có báo cáo lỗi nào.</td></tr>}
+                            {bugs.length === 0 && (
+                                <tr>
+                                    <td colSpan={4} className="p-20 text-center text-slate-600 font-bold uppercase tracking-widest bg-slate-950/20">Chưa có báo cáo lỗi mới</td>
+                                </tr>
+                            )}
                         </tbody>
                     </table>
                 </div>
@@ -291,20 +356,26 @@ export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLo
 
         return (
             <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden border-t-4 border-t-yellow-500">
                     <div className="p-6 text-center border-b border-slate-800">
-                         <h2 className="text-xl font-bold text-white mb-1">Thanh toán & Kích hoạt</h2>
+                         <h2 className="text-xl font-black text-white mb-1 uppercase tracking-tighter">THANH TOÁN & KÍCH HOẠT</h2>
+                         <p className="text-slate-500 text-xs">Vui lòng quét mã QR bên dưới để bắt đầu</p>
                     </div>
-                    <div className="p-6 bg-white flex flex-col items-center">
-                        <img src={qrUrl} alt="VietQR" className="w-48 h-48 mb-4" />
-                        <div className="w-full bg-slate-900 p-4 rounded-lg text-xs space-y-2 text-slate-300">
-                             <div className="flex justify-between"><span>Số tài khoản</span><span className="text-red-500 font-bold">cs6</span></div>
-                             <div className="flex justify-between"><span>Nội dung CK</span><span className="text-yellow-400 font-bold">{user.paymentCode}</span></div>
+                    <div className="p-8 bg-white flex flex-col items-center">
+                        <img src={qrUrl} alt="VietQR" className="w-48 h-48 mb-6 shadow-xl rounded-lg" />
+                        <div className="w-full bg-slate-950 p-5 rounded-2xl text-xs space-y-3 text-slate-400 border border-slate-800">
+                             <div className="flex justify-between items-center"><span>Ngân hàng</span><span className="text-white font-black">Vietcombank</span></div>
+                             <div className="flex justify-between items-center"><span>Số tài khoản</span><span className="text-emerald-400 font-black text-sm tracking-wider">cs6</span></div>
+                             <div className="flex justify-between items-center"><span>Số tiền</span><span className="text-white font-black">{planPrice.toLocaleString()}đ</span></div>
+                             <div className="flex justify-between items-center bg-yellow-950/20 p-2 rounded-lg border border-yellow-900/30">
+                                <span>Nội dung CK</span>
+                                <span className="text-yellow-500 font-black text-sm tracking-widest">{user.paymentCode}</span>
+                             </div>
                         </div>
                     </div>
-                    <div className="p-4 bg-slate-900 text-center grid grid-cols-2 gap-2">
-                        <button onClick={onUpdate} className="bg-slate-800 hover:bg-slate-700 text-white py-2 rounded text-sm font-bold flex items-center justify-center gap-2"><RefreshCw size={14}/> Làm mới</button>
-                        <button onClick={onLogout} className="bg-red-900/20 text-red-400 py-2 rounded text-sm font-bold flex items-center justify-center gap-2 border border-red-900/30"><LogOut size={14}/> Đăng xuất</button>
+                    <div className="p-5 bg-slate-900 flex gap-3">
+                        <button onClick={onUpdate} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 transition-all"><RefreshCw size={14}/> LÀM MỚI</button>
+                        <button onClick={onLogout} className="bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-white px-4 py-3 rounded-2xl transition-all border border-slate-700"><LogOut size={16}/></button>
                     </div>
                 </div>
             </div>
@@ -312,26 +383,70 @@ export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLo
     }
 
     return (
-        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
-             <div className="text-center mb-12">
-                <h2 className="text-4xl font-bold text-white mb-4">Mở khóa PBN Hunter Pro</h2>
-                <p className="text-slate-400">Chọn gói phù hợp để bắt đầu săn lùng domain expired chất lượng.</p>
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+             <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(37,99,235,0.05),transparent_70%)] pointer-events-none"></div>
+             
+             <div className="text-center mb-16 relative z-10">
+                <div className="inline-block bg-blue-600/10 border border-blue-600/20 px-4 py-1.5 rounded-full text-blue-400 text-[10px] font-black uppercase tracking-[0.3em] mb-4">Pricing Plans</div>
+                <h2 className="text-5xl font-black text-white mb-4 tracking-tighter">Mở khóa PBN Hunter Pro</h2>
+                <p className="text-slate-400 max-w-xl mx-auto font-medium">Chọn gói hội viên phù hợp để bắt đầu săn lùng những tên miền chất lượng cao nhất cho mạng lưới của bạn.</p>
              </div>
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl w-full mb-20">
+
+             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl w-full mb-24 relative z-10">
                 {(Object.keys(PLANS) as PlanType[]).map(key => (
-                    <div key={key} onClick={() => setSelectedPlan(key)} className={`bg-slate-900 p-6 rounded-2xl border-2 transition-all cursor-pointer ${selectedPlan === key ? 'border-blue-500 shadow-xl' : 'border-slate-800 hover:border-slate-700'}`}>
-                        <h3 className="text-xl font-bold text-white mb-2">{PLANS[key].name}</h3>
-                        <div className="text-3xl font-bold text-blue-400 mb-6">{PLANS[key].price.toLocaleString()}đ</div>
-                        <button className={`w-full py-3 rounded-lg font-bold ${selectedPlan === key ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-500'}`}>Chọn Gói</button>
+                    <div 
+                        key={key} 
+                        onClick={() => setSelectedPlan(key)} 
+                        className={`group bg-slate-900/50 backdrop-blur-sm p-8 rounded-[2.5rem] border-2 transition-all cursor-pointer relative overflow-hidden ${selectedPlan === key ? 'border-blue-600 bg-slate-900 shadow-[0_20px_50px_rgba(37,99,235,0.1)] scale-105' : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'}`}
+                    >
+                        {key === '1_year' && (
+                            <div className="absolute top-6 right-[-35px] bg-emerald-600 text-white text-[9px] font-black py-1 px-10 rotate-45 shadow-lg">BEST VALUE</div>
+                        )}
+                        <h3 className="text-2xl font-black text-white mb-2 uppercase tracking-tighter">{PLANS[key].name}</h3>
+                        <div className="flex items-baseline gap-1 mb-8">
+                            <span className="text-4xl font-black text-blue-500">{(PLANS[key].price / 1000).toLocaleString()}k</span>
+                            <span className="text-slate-500 font-bold text-sm uppercase tracking-widest">/ VNĐ</span>
+                        </div>
+                        
+                        <div className="space-y-4 mb-10">
+                            <div className="flex items-center gap-3 text-slate-300 text-sm font-medium">
+                                <Check size={16} className="text-blue-500 bg-blue-500/10 rounded-full p-0.5"/> 
+                                Full quyền quét 10k domain/lần
+                            </div>
+                            <div className="flex items-center gap-3 text-slate-300 text-sm font-medium">
+                                <Check size={16} className="text-blue-500 bg-blue-500/10 rounded-full p-0.5"/> 
+                                AI Audit không giới hạn
+                            </div>
+                            <div className="flex items-center gap-3 text-slate-300 text-sm font-medium">
+                                <Check size={16} className="text-blue-500 bg-blue-500/10 rounded-full p-0.5"/> 
+                                Support VIP 24/7
+                            </div>
+                        </div>
+
+                        <button className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${selectedPlan === key ? 'bg-blue-600 text-white shadow-xl shadow-blue-900/40' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700 group-hover:text-slate-300'}`}>
+                            {selectedPlan === key ? 'Đã chọn gói' : 'Chọn gói này'}
+                        </button>
                     </div>
                 ))}
              </div>
+
              {selectedPlan && (
-                <div className="fixed bottom-0 left-0 w-full bg-slate-900 border-t border-slate-800 p-6 shadow-2xl flex items-center justify-center gap-10">
-                    <div className="text-white font-bold text-xl">{PLANS[selectedPlan].name} - {PLANS[selectedPlan].price.toLocaleString()}đ</div>
-                    <button onClick={handleSubscribe} className="bg-green-600 hover:bg-green-500 text-white px-10 py-3 rounded-xl font-bold flex items-center gap-2"><Check/> Xác nhận đăng ký</button>
+                <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 z-50 animate-in fade-in slide-in-from-bottom-10">
+                    <div className="bg-slate-900/90 backdrop-blur-2xl border border-blue-500/50 p-6 rounded-3xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] flex items-center justify-between gap-6">
+                        <div className="flex flex-col">
+                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Thanh toán cho gói:</span>
+                            <span className="text-white font-black text-xl uppercase tracking-tighter">{PLANS[selectedPlan].name} — <span className="text-blue-500">{PLANS[selectedPlan].price.toLocaleString()}đ</span></span>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => setSelectedPlan(null)} className="text-slate-500 font-black text-xs uppercase hover:text-white px-4 transition-colors">Hủy</button>
+                            <button onClick={handleSubscribe} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-2 shadow-xl shadow-blue-900/30 transition-all hover:scale-105 active:scale-95">
+                                <CreditCard size={16}/> TIẾP TỤC THANH TOÁN
+                            </button>
+                        </div>
+                    </div>
                 </div>
              )}
+             <button onClick={onLogout} className="mt-8 text-slate-600 hover:text-slate-400 font-bold text-xs uppercase tracking-widest transition-colors">Đăng xuất khỏi tài khoản</button>
         </div>
     );
 };

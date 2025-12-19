@@ -73,6 +73,7 @@ export interface User {
   paymentCode: string;
   expiryDate?: number;
   createdAt: number;
+  isLocked?: boolean;
 }
 
 export interface AccessKey {

@@ -174,15 +174,19 @@ export const deleteBugReport = (id: string) => {
 
 // --- AUTH CORE ---
 
-export const login = (email: string, password: string): User | null => {
+export const login = (email: string, password: string): { success: boolean, user?: User, message: string } => {
     const users = getUsers();
     const normalizedEmail = email.toLowerCase().trim();
     const user = users.find(u => u.email.toLowerCase() === normalizedEmail && u.password === password);
+    
     if (user) {
+        if (user.isLocked) {
+            return { success: false, message: "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Admin." };
+        }
         localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
-        return user;
+        return { success: true, user, message: "Đăng nhập thành công." };
     }
-    return null;
+    return { success: false, message: "Email hoặc mật khẩu không đúng." };
 };
 
 export const register = (email: string, password: string): { success: boolean, message: string } => {
@@ -229,6 +233,11 @@ export const getCurrentUser = (): User | null => {
     
     if (!freshUser) return null;
 
+    if (freshUser.isLocked) {
+        localStorage.removeItem(CURRENT_USER_KEY);
+        return null;
+    }
+
     if (freshUser.expiryDate && Date.now() > freshUser.expiryDate && freshUser.subscriptionStatus === 'active') {
         const updatedUser = { ...freshUser, subscriptionStatus: 'inactive' as const };
         const updatedUsers = users.map(u => u.email === updatedUser.email ? updatedUser : u);
@@ -270,6 +279,17 @@ export const revokeUser = (email: string) => {
     });
     saveUsers(updatedUsers);
 }
+
+export const toggleLockUser = (email: string) => {
+    const users = getUsers();
+    const updatedUsers = users.map(u => {
+        if (u.email.toLowerCase() === email.toLowerCase()) {
+            return { ...u, isLocked: !u.isLocked };
+        }
+        return u;
+    });
+    saveUsers(updatedUsers);
+};
 
 export const generateSyncCode = (email: string): string => {
     const users = getUsers();
