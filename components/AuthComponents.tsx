@@ -1,9 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User, PLANS, PlanType, AccessKey, BugReport } from '../types';
-import { login, register, requestSubscription, getUsers, approveUser, revokeUser, logout, importUsers, loginWithSyncCode, generateSyncCode, createAccessKey, getAccessKeys, deleteAccessKey, loginWithAccessKey, getBugReports, resolveBugReport, deleteBugReport, toggleLockUser } from '../services/authService';
-// Added missing PlusCircle import from lucide-react
-import { Lock, User as UserIcon, Check, CreditCard, Shield, LogOut, Clock, AlertCircle, RefreshCw, Globe, ArrowRight, Download, Upload, Database, Smartphone, Copy, Key, Trash2, Plus, MessageSquare, Send, Bug, UserX, UserCheck, PlusCircle } from 'lucide-react';
+import { login, register, requestSubscription, getUsers, approveUser, revokeUser, logout, loginWithSyncCode, createAccessKey, getAccessKeys, deleteAccessKey, loginWithAccessKey, getBugReports, resolveBugReport, deleteBugReport, toggleLockUser } from '../services/authService';
+import { Lock, User as UserIcon, Check, CreditCard, Shield, LogOut, Clock, AlertCircle, RefreshCw, Globe, ArrowRight, Download, Upload, Database, Smartphone, Copy, Key, Trash2, Plus, MessageSquare, Send, Bug, UserX, UserCheck, PlusCircle, Loader2 } from 'lucide-react';
 
 // --- LOGIN / REGISTER FORM ---
 export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) => {
@@ -13,39 +12,47 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
     const [syncCode, setSyncCode] = useState('');
     const [accessKey, setAccessKey] = useState('');
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
+        setLoading(true);
         
-        if (mode === 'login') {
-            const res = login(email, password);
-            if (res.success && res.user) onLogin(res.user);
-            else setError(res.message);
-        } else if (mode === 'register') {
-            const res = register(email, password);
-            if (res.success) {
-                alert("Đăng ký thành công! Vui lòng đăng nhập.");
-                setMode('login');
-            } else {
-                setError(res.message);
+        try {
+            if (mode === 'login') {
+                const res = login(email, password);
+                if (res.success && res.user) onLogin(res.user);
+                else setError(res.message);
+            } else if (mode === 'register') {
+                const res = await register(email, password);
+                if (res.success) {
+                    alert(res.message);
+                    setMode('login');
+                } else {
+                    setError(res.message);
+                }
+            } else if (mode === 'sync') {
+                const res = loginWithSyncCode(syncCode);
+                if (res.success && res.user) {
+                    alert(res.message);
+                    onLogin(res.user);
+                } else {
+                    setError(res.message);
+                }
+            } else if (mode === 'key') {
+                const res = loginWithAccessKey(accessKey.trim());
+                if (res.success && res.user) {
+                    alert(res.message);
+                    onLogin(res.user);
+                } else {
+                    setError(res.message);
+                }
             }
-        } else if (mode === 'sync') {
-            const res = loginWithSyncCode(syncCode);
-            if (res.success && res.user) {
-                alert(res.message);
-                onLogin(res.user);
-            } else {
-                setError(res.message);
-            }
-        } else if (mode === 'key') {
-            const res = loginWithAccessKey(accessKey.trim());
-            if (res.success && res.user) {
-                alert(res.message);
-                onLogin(res.user);
-            } else {
-                setError(res.message);
-            }
+        } catch (err) {
+            setError("Đã xảy ra lỗi hệ thống trong quá trình đăng ký.");
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -73,11 +80,11 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                     {(mode === 'login' || mode === 'register') && (
                         <>
                             <div>
-                                <label className="block text-slate-400 text-sm font-medium mb-1">Email</label>
+                                <label className="block text-slate-400 text-sm font-medium mb-1">Email {mode === 'register' && '(Bắt buộc đúng định dạng)'}</label>
                                 <input type="email" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com" />
                             </div>
                             <div>
-                                <label className="block text-slate-400 text-sm font-medium mb-1">Mật khẩu</label>
+                                <label className="block text-slate-400 text-sm font-medium mb-1">Mật khẩu {mode === 'register' && '(Tối thiểu 6 ký tự)'}</label>
                                 <input type="password" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
                             </div>
                         </>
@@ -100,9 +107,13 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                         </div>
                     )}
 
-                    <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/50 mt-2">
-                        {mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : 'Kích hoạt'}
+                    <button disabled={loading} type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/50 mt-2 flex items-center justify-center gap-3">
+                        {loading && <Loader2 size={18} className="animate-spin" />}
+                        {loading ? 'Đang kích hoạt hệ thống...' : (mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : 'Kích hoạt')}
                     </button>
+                    {loading && mode === 'register' && (
+                        <p className="text-[10px] text-center text-blue-400 animate-pulse uppercase font-black tracking-widest mt-2">Đang soạn và gửi email thông báo cho Admin...</p>
+                    )}
                 </form>
 
                 <div className="mt-6 flex flex-col gap-3 text-center text-sm">
@@ -112,8 +123,8 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                             <button onClick={() => setMode('sync')} className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-lg flex items-center justify-center gap-1 transition-colors text-xs border border-slate-700">Sync</button>
                         </div>
                     )}
-                    <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')} className="text-slate-400 hover:text-white transition-colors">
-                        {mode === 'login' ? 'Chưa có tài khoản? Đăng ký' : 'Quay lại đăng nhập'}
+                    <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')} className="text-slate-400 hover:text-white transition-colors font-medium underline underline-offset-4">
+                        {mode === 'login' ? 'Chưa có tài khoản? Đăng ký ngay' : 'Đã có tài khoản? Quay lại đăng nhập'}
                     </button>
                 </div>
             </div>
@@ -130,12 +141,23 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
     const [tab, setTab] = useState<'users' | 'keys' | 'bugs'>('users');
     const [selectedPlanForNewKey, setSelectedPlanForNewKey] = useState<PlanType>('1_month');
 
+    // Lắng nghe sự kiện đồng bộ từ các tab khác (Khi có user đăng ký ở tab khác)
+    useEffect(() => {
+        const syncHandler = () => {
+            setUsers(getUsers());
+            setKeys(getAccessKeys());
+            setBugs(getBugReports());
+        };
+        window.addEventListener('storage_sync', syncHandler);
+        return () => window.removeEventListener('storage_sync', syncHandler);
+    }, []);
+
     useEffect(() => {
         const interval = setInterval(() => {
             setUsers(getUsers());
             setKeys(getAccessKeys());
             setBugs(getBugReports());
-        }, 5000);
+        }, 10000); 
         return () => clearInterval(interval);
     }, []);
 
@@ -186,19 +208,19 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
                 <div className="flex items-center gap-6">
                     <h1 className="text-2xl font-black text-white flex items-center gap-2 tracking-tighter"><Shield className="text-red-500"/> ADMIN PANEL</h1>
                     <nav className="flex gap-2">
-                        <button onClick={() => setTab('users')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Người dùng</button>
-                        <button onClick={() => setTab('keys')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'keys' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Activation Keys</button>
-                        <button onClick={() => setTab('bugs')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'bugs' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Báo cáo lỗi ({bugs.filter(b => b.status === 'new').length})</button>
+                        <button onClick={() => setTab('users')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'users' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Người dùng ({users.filter(u => u.role !== 'admin').length})</button>
+                        <button onClick={() => setTab('keys')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'keys' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Activation Keys</button>
+                        <button onClick={() => setTab('bugs')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'bugs' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Báo cáo lỗi ({bugs.filter(b => b.status === 'new').length})</button>
                     </nav>
                 </div>
                 <div className="flex items-center gap-3">
-                    <button onClick={onGoToTool} className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl text-xs font-black shadow-lg shadow-emerald-900/20">Vào Tool</button>
+                    <button onClick={onGoToTool} className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl text-xs font-black shadow-lg shadow-emerald-900/20 transition-all hover:scale-105">Vào Tool</button>
                     <button onClick={onLogout} className="bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-white p-2.5 rounded-xl border border-slate-700 transition-all"><LogOut size={16} /></button>
                 </div>
             </header>
 
             {tab === 'users' && (
-                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
+                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
                     <table className="w-full text-left">
                         <thead>
                             <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
@@ -210,7 +232,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
                             </tr>
                         </thead>
                         <tbody className="text-sm text-slate-300">
-                            {users.filter(u => u.role !== 'admin').map((u) => (
+                            {[...users].filter(u => u.role !== 'admin').reverse().map((u) => (
                                 <tr key={u.email} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${u.isLocked ? 'opacity-60 grayscale' : ''}`}>
                                     <td className="p-6">
                                         <div className="font-black text-white">{u.email}</div>
@@ -255,7 +277,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
             )}
 
             {tab === 'keys' && (
-                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
+                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
                     <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
                         <h3 className="font-black text-white tracking-tighter">QUẢN LÝ KEY KÍCH HOẠT</h3>
                         <div className="flex gap-2">
@@ -300,7 +322,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
             )}
 
             {tab === 'bugs' && (
-                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
+                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
                     <table className="w-full text-left">
                         <thead>
                             <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
