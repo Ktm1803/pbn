@@ -10,7 +10,7 @@ import {
   Play, Settings, CheckCircle2, AlertTriangle, Download, RefreshCw, Search, Bot, 
   Globe, ShieldCheck, Filter, PlusCircle, DollarSign, History, ExternalLink, 
   ShoppingCart, CheckSquare, Square, X, XCircle, LogOut, Smartphone, Shield, 
-  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare
+  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy
 } from 'lucide-react';
 
 const REG_FEES: Record<string, number> = {
@@ -27,6 +27,7 @@ export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [showAdminDashboard, setShowAdminDashboard] = useState(false);
   const [showBugReport, setShowBugReport] = useState(false);
+  const [showSyncModal, setShowSyncModal] = useState(false);
   const [bugContent, setBugContent] = useState("");
   const [currentStep, setCurrentStep] = useState<Step>(Step.Crawl);
   const [domains, setDomains] = useState<DomainEntity[]>([]);
@@ -68,7 +69,7 @@ export default function App() {
   };
 
   const removeTld = (tldToRemove: string) => {
-    if (INITIAL_TLDS.includes(tldToRemove)) return; // Don't remove default ones
+    if (INITIAL_TLDS.includes(tldToRemove)) return; 
     setAvailableTlds(prev => prev.filter(t => t !== tldToRemove));
   };
 
@@ -79,6 +80,14 @@ export default function App() {
         setBugContent("");
         setShowBugReport(false);
         alert("Cảm ơn bạn! Báo cáo lỗi đã được gửi đến Admin.");
+    }
+  };
+
+  const copySyncCode = () => {
+    if (currentUser) {
+        const syncCode = btoa(JSON.stringify(currentUser));
+        navigator.clipboard.writeText(syncCode);
+        alert("Đã sao chép mã đồng bộ vào bộ nhớ tạm!");
     }
   };
 
@@ -433,6 +442,9 @@ export default function App() {
                 <a href="https://t.me/hima_dev" target="_blank" className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-5 py-2.5 rounded-xl text-xs font-black border border-blue-500/30 flex items-center gap-2 transition-all hover:scale-105">
                     <Send size={14}/> Telegram @hima_dev
                 </a>
+                <button onClick={() => setShowSyncModal(true)} className="bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 px-5 py-2.5 rounded-xl text-xs font-black border border-emerald-500/30 flex items-center gap-2 transition-all hover:scale-105">
+                    <Smartphone size={14}/> Đồng bộ thiết bị
+                </button>
                 <button onClick={() => setShowBugReport(true)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-5 py-2.5 rounded-xl text-xs font-black border border-slate-700 flex items-center gap-2 transition-all hover:scale-105">
                     <Bug size={14}/> Báo cáo lỗi
                 </button>
@@ -450,6 +462,26 @@ export default function App() {
               <div className="pb-20">{renderStepContent()}</div>
           </div>
       </main>
+
+      {/* MODAL ĐỒNG BỘ THIẾT BỊ */}
+      {showSyncModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+                  <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-black text-white flex items-center gap-2"><Smartphone className="text-emerald-500"/> Đồng bộ thiết bị mới</h3>
+                      <button onClick={() => setShowSyncModal(false)} className="text-slate-500 hover:text-white p-1 rounded-full hover:bg-slate-800 transition-colors"><X/></button>
+                  </div>
+                  <div className="space-y-6">
+                      <p className="text-sm text-slate-400 font-medium">Sao chép mã dưới đây và dán vào phần <b>"Sync"</b> ở màn hình đăng nhập trên thiết bị mới của bạn để chuyển phiên làm việc ngay lập tức.</p>
+                      <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl relative group">
+                          <textarea readOnly className="w-full h-32 bg-transparent text-[10px] text-emerald-500 font-mono outline-none resize-none custom-scrollbar pr-10" value={btoa(JSON.stringify(currentUser))}></textarea>
+                          <button onClick={copySyncCode} className="absolute top-4 right-4 p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg transition-all border border-slate-700"><Copy size={16}/></button>
+                      </div>
+                      <button onClick={() => setShowSyncModal(false)} className="w-full bg-slate-800 text-white p-4 rounded-2xl font-black transition-all hover:bg-slate-700 active:scale-95 uppercase tracking-widest text-xs">Đóng lại</button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       {showBugReport && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
