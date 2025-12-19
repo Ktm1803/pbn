@@ -50,7 +50,7 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                 }
             }
         } catch (err) {
-            setError("Đã xảy ra lỗi hệ thống trong quá trình đăng ký.");
+            setError("Đã xảy ra lỗi hệ thống trong quá trình xử lý.");
         } finally {
             setLoading(false);
         }
@@ -104,12 +104,13 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                                 <input type="text" required className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-mono pl-10 uppercase" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="KEY-XXXX-XXXX" />
                                 <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
                             </div>
+                            <p className="mt-2 text-[10px] text-slate-500 italic">* Lưu ý: Login bằng Key cho phép bạn truy cập từ bất kỳ trình duyệt nào mà không cần Email/Pass.</p>
                         </div>
                     )}
 
                     <button disabled={loading} type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/50 mt-2 flex items-center justify-center gap-3">
                         {loading && <Loader2 size={18} className="animate-spin" />}
-                        {loading ? 'Đang kích hoạt hệ thống...' : (mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : 'Kích hoạt')}
+                        {loading ? 'Đang kích hoạt hệ thống...' : (mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : 'Kích hoạt Key')}
                     </button>
                     {loading && mode === 'register' && (
                         <p className="text-[10px] text-center text-blue-400 animate-pulse uppercase font-black tracking-widest mt-2">Đang soạn và gửi email thông báo cho Admin...</p>
@@ -119,13 +120,26 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                 <div className="mt-6 flex flex-col gap-3 text-center text-sm">
                     {mode === 'login' && (
                         <div className="grid grid-cols-2 gap-2">
-                            <button onClick={() => setMode('key')} className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-lg flex items-center justify-center gap-1 transition-colors text-xs border border-slate-700">Login Key</button>
-                            <button onClick={() => setMode('sync')} className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-lg flex items-center justify-center gap-1 transition-colors text-xs border border-slate-700">Sync</button>
+                            <button onClick={() => setMode('key')} className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-lg flex items-center justify-center gap-1 transition-colors text-xs border border-slate-700 font-bold">Login with Key</button>
+                            <button onClick={() => setMode('sync')} className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-lg flex items-center justify-center gap-1 transition-colors text-xs border border-slate-700 font-bold">Sync</button>
                         </div>
                     )}
-                    <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')} className="text-slate-400 hover:text-white transition-colors font-medium underline underline-offset-4">
-                        {mode === 'login' ? 'Chưa có tài khoản? Đăng ký ngay' : 'Đã có tài khoản? Quay lại đăng nhập'}
-                    </button>
+                    
+                    <div className="flex flex-col gap-2 mt-2">
+                        <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')} className="text-slate-400 hover:text-white transition-colors font-medium underline underline-offset-4">
+                            {mode === 'login' ? 'Chưa có tài khoản? Đăng ký ngay' : 'Đã có tài khoản? Quay lại đăng nhập'}
+                        </button>
+                        
+                        <div className="h-px bg-slate-800 w-full my-2"></div>
+
+                        <a 
+                            href="https://t.me/hima_dev" 
+                            target="_blank" 
+                            className="bg-[#229ED9]/10 hover:bg-[#229ED9]/20 text-[#229ED9] py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-[#229ED9]/30 transition-all hover:scale-[1.02]"
+                        >
+                            <Send size={16}/> LIÊN HỆ HỖ TRỢ TELEGRAM
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>

