@@ -199,9 +199,21 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
             setRefresh(r => r+1);
         }
     };
+        const handleDeleteKey = (code: string) => {
+        if(confirm(`remove key ${code}?`)) {
+            deleteAccessKey(code);
+            setRefresh(r => r+1);
+        }
+    };
 
     const handleToggleLock = (email: string, isLocked: boolean) => {
         if (confirm(`${isLocked ? 'Mở khóa' : 'Khóa'} tài khoản ${email}?`)) {
+            toggleLockUser(email);
+            setRefresh(r => r+1);
+        }
+    };
+        const handleToggleLock = (email: string, isLocked: boolean) => {
+        if (confirm(`${isLocked ? 'unlock' : 'lock'} account ${email}?`)) {
             toggleLockUser(email);
             setRefresh(r => r+1);
         }
@@ -238,7 +250,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => 
                     <table className="w-full text-left">
                         <thead>
                             <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
-                                <th className="p-6 border-b border-slate-800">Thông tin User</th>
+                                <th className="p-6 border-b border-slate-800">User</th>
                                 <th className="p-6 border-b border-slate-800">Mã Payment</th>
                                 <th className="p-6 border-b border-slate-800">Thời hạn sử dụng</th>
                                 <th className="p-6 border-b border-slate-800">Trạng thái</th>
