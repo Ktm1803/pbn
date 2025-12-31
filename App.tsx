@@ -117,7 +117,12 @@ export default function App() {
         processed++;
         const nameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
         const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)];
-        const fullUrl = `${nameRoot}${getRandomInt(10, 999999)}${randomTLD}`;
+        
+        // Cập nhật: Tránh tạo ra chuỗi số dài (ví dụ: -792642). 
+        // Chỉ thêm số nhỏ 1-99 nếu cần thiết hoặc giữ nguyên tên sạch.
+        const suffix = Math.random() > 0.6 ? getRandomInt(1, 99) : '';
+        const fullUrl = `${nameRoot}${suffix}${randomTLD}`;
+        
         const archiveSnapshots = getRandomInt(0, 1000);
         if (archiveSnapshots <= 0) continue; 
 
