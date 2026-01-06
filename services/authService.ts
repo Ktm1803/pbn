@@ -108,12 +108,8 @@ export const login = (email: string, password: string): { success: boolean, user
     return { success: false, message: "Email hoặc mật khẩu không đúng." };
 };
 
-/**
- * GIẢ LẬP ĐĂNG NHẬP GOOGLE
- */
 export const loginWithGoogle = async (): Promise<{ success: boolean, user?: User, message: string }> => {
     await new Promise(resolve => setTimeout(resolve, 2000));
-    
     const googleEmail = `user_${Math.random().toString(36).slice(2, 7)}@gmail.com`;
     const users = getUsers();
     let user = users.find(u => u.email.toLowerCase() === googleEmail.toLowerCase());
@@ -131,7 +127,6 @@ export const loginWithGoogle = async (): Promise<{ success: boolean, user?: User
         users.push(user);
         saveUsers(users);
 
-        // Chỉ gửi email chào mừng cho người dùng, không thông báo cho Admin
         try {
             const userEmailBody = await generateEmailBody('USER', { email: googleEmail });
             await simulateEmailSend(googleEmail, "Welcome to PBN Hunter Pro", userEmailBody);
@@ -180,7 +175,6 @@ export const register = async (email: string, password: string): Promise<{ succe
 
     try {
         const userEmailBody = await generateEmailBody('USER', { email: normalizedEmail });
-        // Chỉ gửi chào mừng cho User, không gửi thông báo cho Admin theo yêu cầu
         await simulateEmailSend(normalizedEmail, "Welcome to PBN Hunter Pro", userEmailBody);
     } catch (e) {
         console.error("Lỗi gửi email chào mừng:", e);
@@ -392,11 +386,18 @@ export const loginWithSyncCode = (code: string): { success: boolean, user?: User
 
 export const requestSubscription = (email: string, plan: PlanType) => {
     const users = getUsers();
+    let updatedUserInList: User | undefined;
     const updatedUsers = users.map(u => {
         if (u.email === email) {
-            return { ...u, plan, subscriptionStatus: 'pending' as const };
+            updatedUserInList = { ...u, plan, subscriptionStatus: 'pending' as const };
+            return updatedUserInList;
         }
         return u;
     });
     saveUsers(updatedUsers);
+    
+    // Đồng thời cập nhật luôn CURRENT_USER_KEY để UI chuyển trạng thái ngay lập tức
+    if (updatedUserInList) {
+        localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(updatedUserInList));
+    }
 };
