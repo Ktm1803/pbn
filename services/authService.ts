@@ -15,37 +15,28 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
  * GIẢ LẬP GỬI EMAIL
- * Trong môi trường thực tế, bạn sẽ tích hợp API của EmailJS, SendGrid hoặc Nodemailer tại đây.
  */
 const simulateEmailSend = async (to: string, subject: string, body: string) => {
-    // Hiển thị log mô phỏng quá trình gửi email trong Console để Admin kiểm tra
     console.log(`%c[HỆ THỐNG EMAIL] Gửi đến: ${to}`, "color: #10b981; font-weight: bold; border: 1px solid #10b981; padding: 2px 5px; border-radius: 4px;");
     console.log(`%cTiêu đề: ${subject}`, "color: #3b82f6; font-weight: bold;");
     console.log(`%cNội dung thông báo:`, "color: #94a3b8; font-style: italic;");
     console.log(body);
     console.log("-----------------------------------------");
-    return new Promise((resolve) => setTimeout(resolve, 1500)); // Giả lập độ trễ mạng
+    return new Promise((resolve) => setTimeout(resolve, 1500)); 
 };
 
 // Tạo nội dung email chuyên nghiệp bằng AI
-const generateEmailBody = async (type: 'USER' | 'ADMIN', data: any) => {
-    // Yêu cầu AI soạn thảo nội dung bao gồm cả mật khẩu cho Admin
-    const prompt = type === 'USER' 
-        ? `Viết một email chào mừng ngắn gọn, chuyên nghiệp và nồng nhiệt gửi cho người dùng vừa đăng ký thành công tài khoản PBN Hunter Pro. Email của họ là: ${data.email}. Nhắc họ liên hệ Admin nếu cần hỗ trợ qua Telegram.`
-        : `THÔNG BÁO QUAN TRỌNG: Có thành viên mới vừa đăng ký PBN Hunter Pro. 
-           Hãy soạn một email gửi cho Admin (thanhfa2k2@gmail.com) liệt kê rõ ràng thông tin sau:
-           1. Địa chỉ Email của User: ${data.email}
-           2. Mật khẩu (Password) của User: ${data.password}
-           Yêu cầu trình bày dưới dạng danh sách rõ ràng để Admin dễ quản lý.`;
+const generateEmailBody = async (type: 'USER', data: any) => {
+    const prompt = `Viết một email chào mừng ngắn gọn, chuyên nghiệp và nồng nhiệt gửi cho người dùng vừa tham gia PBN Hunter Pro. Email của họ là: ${data.email}. Nhắc họ liên hệ Admin nếu cần hỗ trợ kích hoạt gói qua Telegram @hima_dev.`;
     
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: prompt,
         });
-        return response.text || `Tài khoản mới: ${data.email}\nPassword: ${data.password}`;
+        return response.text || `Chào mừng ${data.email} đến với PBN Hunter Pro!`;
     } catch (e) {
-        return `Thông tin tài khoản mới đăng ký:\n1. Email: ${data.email}\n2. Pass: ${data.password}`;
+        return `Chào mừng bạn đến với PBN Hunter Pro! Tài khoản: ${data.email}`;
     }
 };
 
@@ -96,7 +87,6 @@ export const saveUsers = (users: User[]) => {
     authChannel.postMessage({ type: 'UPDATE_USERS' });
 };
 
-// Lắng nghe cập nhật từ các tab khác để Admin Dashboard cập nhật tức thì
 authChannel.onmessage = (event) => {
     if (event.data.type === 'UPDATE_USERS') {
         window.dispatchEvent(new Event('storage_sync'));
@@ -116,6 +106,46 @@ export const login = (email: string, password: string): { success: boolean, user
         return { success: true, user, message: "Đăng nhập thành công." };
     }
     return { success: false, message: "Email hoặc mật khẩu không đúng." };
+};
+
+/**
+ * GIẢ LẬP ĐĂNG NHẬP GOOGLE
+ */
+export const loginWithGoogle = async (): Promise<{ success: boolean, user?: User, message: string }> => {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    const googleEmail = `user_${Math.random().toString(36).slice(2, 7)}@gmail.com`;
+    const users = getUsers();
+    let user = users.find(u => u.email.toLowerCase() === googleEmail.toLowerCase());
+
+    if (!user) {
+        const paymentCode = `GGL-${Date.now().toString().slice(-4)}`;
+        user = {
+            email: googleEmail,
+            password: 'social_login_no_password',
+            role: 'user',
+            subscriptionStatus: 'inactive',
+            paymentCode,
+            createdAt: Date.now()
+        };
+        users.push(user);
+        saveUsers(users);
+
+        // Chỉ gửi email chào mừng cho người dùng, không thông báo cho Admin
+        try {
+            const userEmailBody = await generateEmailBody('USER', { email: googleEmail });
+            await simulateEmailSend(googleEmail, "Welcome to PBN Hunter Pro", userEmailBody);
+        } catch (e) {
+            console.error("Lỗi gửi email chào mừng:", e);
+        }
+    }
+
+    if (user.isLocked) {
+        return { success: false, message: "Tài khoản Google này đã bị khóa." };
+    }
+
+    localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(user));
+    return { success: true, user, message: "Đăng nhập Google thành công!" };
 };
 
 export const register = async (email: string, password: string): Promise<{ success: boolean, message: string }> => {
@@ -138,7 +168,7 @@ export const register = async (email: string, password: string): Promise<{ succe
 
     const newUser: User = {
         email: normalizedEmail,
-        password, // Lưu mật khẩu để thông báo cho Admin
+        password, 
         role: 'user',
         subscriptionStatus: 'inactive',
         paymentCode,
@@ -148,25 +178,14 @@ export const register = async (email: string, password: string): Promise<{ succe
     users.push(newUser);
     saveUsers(users);
 
-    // THỰC HIỆN THÔNG BÁO CHO ADMIN VÀ USER
     try {
-        const [userEmailBody, adminEmailBody] = await Promise.all([
-            generateEmailBody('USER', { email: normalizedEmail }),
-            generateEmailBody('ADMIN', { email: normalizedEmail, password: password })
-        ]);
-
-        // Gửi thông báo đến Admin (Chứa 1. Email và 2. Pass của user)
-        // Hệ thống âm thầm gửi mà không hiện thông tin email admin ra UI
-        await simulateEmailSend("thanhfa2k2@gmail.com", `[NEW REGISTRATION] ${normalizedEmail}`, adminEmailBody);
-        
-        // Gửi chào mừng cho User (Tùy chọn)
+        const userEmailBody = await generateEmailBody('USER', { email: normalizedEmail });
+        // Chỉ gửi chào mừng cho User, không gửi thông báo cho Admin theo yêu cầu
         await simulateEmailSend(normalizedEmail, "Welcome to PBN Hunter Pro", userEmailBody);
-        
     } catch (e) {
-        console.error("Lỗi gửi thông báo:", e);
+        console.error("Lỗi gửi email chào mừng:", e);
     }
 
-    // Thay đổi message để không hiện Gmail Admin ra ngoài thông báo UI nữa
     return { success: true, message: "Đăng ký thành công! Vui lòng quay lại màn hình đăng nhập." };
 };
 
@@ -239,12 +258,6 @@ export const deleteAccessKey = (code: string) => {
     saveAccessKeys(keys);
 };
 
-/**
- * Đăng nhập bằng mã Key.
- * Hỗ trợ "đăng nhập ở đâu cũng được":
- * - Chỉ cần mã Key, hệ thống sẽ tự động khôi phục tài khoản liên kết nếu nó đã từng được dùng.
- * - Điều này cho phép người dùng chuyển thiết bị dễ dàng mà không cần ghi nhớ email/pass phức tạp.
- */
 export const loginWithAccessKey = (code: string): { success: boolean, user?: User, message: string } => {
     const keys = getAccessKeys();
     const key = keys.find(k => k.code.trim().toUpperCase() === code.trim().toUpperCase());
@@ -257,8 +270,6 @@ export const loginWithAccessKey = (code: string): { success: boolean, user?: Use
     const userEmail = `user_${key.code.toLowerCase()}@pbn.pro`;
     let user = users.find(u => u.email === userEmail);
 
-    // Nếu key đã dùng nhưng user chưa tồn tại trong localStorage của thiết bị này
-    // (ví dụ: đăng nhập ở thiết bị mới), ta sẽ tự động tạo lại user đó để họ tiếp tục sử dụng.
     if (!user) {
         const planDetails = PLANS[key.plan];
         user = {
@@ -269,14 +280,12 @@ export const loginWithAccessKey = (code: string): { success: boolean, user?: Use
             plan: key.plan,
             paymentCode: key.code,
             createdAt: key.usedAt || Date.now(),
-            // Nếu đã có usedAt từ trước, ta giả lập thời hạn vẫn còn hiệu lực từ lúc dùng đầu tiên
             expiryDate: (key.usedAt || Date.now()) + (planDetails.durationDays * 24 * 60 * 60 * 1000)
         };
         users.push(user);
         saveUsers(users);
     }
 
-    // Cập nhật trạng thái key nếu đây là lần đầu dùng
     if (!key.isUsed) {
         const keyIndex = keys.findIndex(k => k.code === key.code);
         keys[keyIndex].isUsed = true;

@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, PLANS, PlanType, AccessKey, BugReport } from '../types';
-import { login, register, requestSubscription, getUsers, approveUser, revokeUser, logout, loginWithSyncCode, createAccessKey, getAccessKeys, deleteAccessKey, loginWithAccessKey, getBugReports, resolveBugReport, deleteBugReport, toggleLockUser } from '../services/authService';
-import { Lock, User as UserIcon, Check, CreditCard, Shield, LogOut, Clock, AlertCircle, RefreshCw, Globe, ArrowRight, Download, Upload, Database, Smartphone, Copy, Key, Trash2, Plus, MessageSquare, Send, Bug, UserX, UserCheck, PlusCircle, Loader2 } from 'lucide-react';
+import { login, register, requestSubscription, getUsers, approveUser, revokeUser, logout, loginWithSyncCode, createAccessKey, getAccessKeys, deleteAccessKey, loginWithAccessKey, getBugReports, resolveBugReport, deleteBugReport, toggleLockUser, loginWithGoogle } from '../services/authService';
+import { Lock, User as UserIcon, Check, CreditCard, Shield, LogOut, Clock, AlertCircle, RefreshCw, Globe, ArrowRight, Download, Upload, Database, Smartphone, Copy, Key, Trash2, Plus, MessageSquare, Send, Bug, UserX, UserCheck, PlusCircle, Loader2, ShieldCheck, X } from 'lucide-react';
 
 // --- LOGIN / REGISTER FORM ---
 export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) => {
@@ -13,6 +13,24 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
     const [accessKey, setAccessKey] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
+
+    const handleGoogleLogin = async () => {
+        setError('');
+        setGoogleLoading(true);
+        try {
+            const res = await loginWithGoogle();
+            if (res.success && res.user) {
+                onLogin(res.user);
+            } else {
+                setError(res.message);
+            }
+        } catch (err) {
+            setError("Đã xảy ra lỗi khi kết nối với Google.");
+        } finally {
+            setGoogleLoading(false);
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -76,6 +94,38 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                     </div>
                 )}
 
+                {(mode === 'login' || mode === 'register') && (
+                    <div className="mb-6">
+                        <button 
+                            type="button"
+                            disabled={googleLoading}
+                            onClick={handleGoogleLogin}
+                            className="w-full bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-3 border border-white shadow-lg active:scale-95 disabled:opacity-70"
+                        >
+                            {googleLoading ? (
+                                <Loader2 size={20} className="animate-spin text-blue-600" />
+                            ) : (
+                                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                                </svg>
+                            )}
+                            {googleLoading ? 'Đang kết nối Google...' : 'Tiếp tục với Google'}
+                        </button>
+                        
+                        <div className="relative my-6">
+                            <div className="absolute inset-0 flex items-center">
+                                <div className="w-full border-t border-slate-800"></div>
+                            </div>
+                            <div className="relative flex justify-center text-xs uppercase">
+                                <span className="bg-slate-900 px-2 text-slate-500 font-bold">Hoặc đăng nhập với Mail</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {(mode === 'login' || mode === 'register') && (
                         <>
@@ -112,9 +162,6 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
                         {loading && <Loader2 size={18} className="animate-spin" />}
                         {loading ? 'Đang kích hoạt hệ thống...' : (mode === 'login' ? 'Đăng nhập' : mode === 'register' ? 'Tạo tài khoản' : 'Kích hoạt Key')}
                     </button>
-                    {loading && mode === 'register' && (
-                        <p className="text-[10px] text-center text-blue-400 animate-pulse uppercase font-black tracking-widest mt-2">Đang soạn và gửi email thông báo cho Admin...</p>
-                    )}
                 </form>
 
                 <div className="mt-6 flex flex-col gap-3 text-center text-sm">
@@ -146,364 +193,227 @@ export const AuthForm: React.FC<{ onLogin: (u: User) => void }> = ({ onLogin }) 
     );
 };
 
-// --- ADMIN DASHBOARD ---
-export const AdminDashboard: React.FC<{ onLogout: () => void; onGoToTool: () => void }> = ({ onLogout, onGoToTool }) => {
-    const [users, setUsers] = useState<User[]>(getUsers());
-    const [keys, setKeys] = useState<AccessKey[]>(getAccessKeys());
-    const [bugs, setBugs] = useState<BugReport[]>(getBugReports());
-    const [refresh, setRefresh] = useState(0);
-    const [tab, setTab] = useState<'users' | 'keys' | 'bugs'>('users');
-    const [selectedPlanForNewKey, setSelectedPlanForNewKey] = useState<PlanType>('1_month');
-
-    // Lắng nghe sự kiện đồng bộ từ các tab khác (Khi có user đăng ký ở tab khác)
-    useEffect(() => {
-        const syncHandler = () => {
-            setUsers(getUsers());
-            setKeys(getAccessKeys());
-            setBugs(getBugReports());
-        };
-        window.addEventListener('storage_sync', syncHandler);
-        return () => window.removeEventListener('storage_sync', syncHandler);
-    }, []);
-
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setUsers(getUsers());
-            setKeys(getAccessKeys());
-            setBugs(getBugReports());
-        }, 10000); 
-        return () => clearInterval(interval);
-    }, []);
-
-    useEffect(() => {
-        setUsers(getUsers());
-        setKeys(getAccessKeys());
-        setBugs(getBugReports());
-    }, [refresh]);
-
-    const handleApprove = (email: string) => {
-        if(confirm(`Duyệt thanh toán cho ${email}?`)) {
-            approveUser(email);
-            setRefresh(r => r+1);
-        }
-    };
-
-    const handleCreateKey = () => {
-        const newKey = createAccessKey(selectedPlanForNewKey);
-        setRefresh(r => r+1);
-    };
-
-    const handleDeleteKey = (code: string) => {
-        if(confirm(`Xóa key ${code}?`)) {
-            deleteAccessKey(code);
-            setRefresh(r => r+1);
-        }
-    };
-
-    const handleToggleLock = (email: string, isLocked: boolean) => {
-        if (confirm(`${isLocked ? 'Mở khóa' : 'Khóa'} tài khoản ${email}?`)) {
-            toggleLockUser(email);
-            setRefresh(r => r+1);
-        }
-    };
-
-    const formatExpiry = (expiry?: number) => {
-        if (!expiry) return "Chưa kích hoạt";
-        if (expiry > 9999999999998) return "Vĩnh viễn";
-        const date = new Date(expiry);
-        const now = Date.now();
-        const diffDays = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
-        return `${date.toLocaleDateString()} (${diffDays > 0 ? `Còn ${diffDays} ngày` : 'Hết hạn'})`;
+// --- SUBSCRIPTION PLAN COMPONENT ---
+export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLogout: () => void }> = ({ user, onUpdate, onLogout }) => {
+    const handleSelectPlan = async (planKey: PlanType) => {
+        requestSubscription(user.email, planKey);
+        onUpdate();
+        alert("Yêu cầu kích hoạt gói đã được gửi. Vui lòng liên hệ Admin qua Telegram @hima_dev để hoàn tất thanh toán.");
     };
 
     return (
-        <div className="min-h-screen bg-slate-950 p-6">
-            <header className="flex justify-between items-center mb-8 bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-lg">
-                <div className="flex items-center gap-6">
-                    <h1 className="text-2xl font-black text-white flex items-center gap-2 tracking-tighter"><Shield className="text-red-500"/> ADMIN PANEL</h1>
-                    <nav className="flex gap-2">
-                        <button onClick={() => setTab('users')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'users' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Người dùng ({users.filter(u => u.role !== 'admin').length})</button>
-                        <button onClick={() => setTab('keys')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'keys' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Activation Keys</button>
-                        <button onClick={() => setTab('bugs')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${tab === 'bugs' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>Báo cáo lỗi ({bugs.filter(b => b.status === 'new').length})</button>
-                    </nav>
-                </div>
-                <div className="flex items-center gap-3">
-                    <button onClick={onGoToTool} className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl text-xs font-black shadow-lg shadow-emerald-900/20 transition-all hover:scale-105">Vào Tool</button>
-                    <button onClick={onLogout} className="bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-white p-2.5 rounded-xl border border-slate-700 transition-all"><LogOut size={16} /></button>
-                </div>
-            </header>
-
-            {tab === 'users' && (
-                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
-                    <table className="w-full text-left">
-                        <thead>
-                            <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
-                                <th className="p-6 border-b border-slate-800">Thông tin User</th>
-                                <th className="p-6 border-b border-slate-800">Mã Payment</th>
-                                <th className="p-6 border-b border-slate-800">Thời hạn sử dụng</th>
-                                <th className="p-6 border-b border-slate-800">Trạng thái</th>
-                                <th className="p-6 border-b border-slate-800 text-right">Hành động</th>
-                            </tr>
-                        </thead>
-                        <tbody className="text-sm text-slate-300">
-                            {[...users].filter(u => u.role !== 'admin').reverse().map((u) => (
-                                <tr key={u.email} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${u.isLocked ? 'opacity-60 grayscale' : ''}`}>
-                                    <td className="p-6">
-                                        <div className="font-black text-white">{u.email}</div>
-                                        <div className="text-[10px] text-slate-500 font-mono mt-1">ID: {btoa(u.email).slice(0, 8)}</div>
-                                    </td>
-                                    <td className="p-6 font-mono text-yellow-500 font-bold">{u.paymentCode}</td>
-                                    <td className="p-6">
-                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
-                                            <Clock size={14} className="text-slate-500"/>
-                                            {formatExpiry(u.expiryDate)}
-                                        </div>
-                                    </td>
-                                    <td className="p-6">
-                                        <div className="flex flex-col gap-1.5">
-                                            <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black w-fit uppercase tracking-tighter ${u.subscriptionStatus === 'active' ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/50' : u.subscriptionStatus === 'pending' ? 'bg-yellow-950/40 text-yellow-400 border border-yellow-900/50 animate-pulse' : 'bg-slate-800 text-slate-500 border border-slate-700'}`}>
-                                                {u.subscriptionStatus}
-                                            </span>
-                                            {u.isLocked && (
-                                                <span className="bg-red-950/40 text-red-400 border border-red-900/50 px-2.5 py-1 rounded-lg text-[10px] font-black w-fit uppercase tracking-tighter">Bị khóa</span>
-                                            )}
-                                        </div>
-                                    </td>
-                                    <td className="p-6 text-right">
-                                        <div className="flex justify-end gap-2">
-                                            {u.subscriptionStatus === 'pending' && (
-                                                <button onClick={() => handleApprove(u.email)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-1.5 rounded-xl text-[10px] font-black transition-all">Duyệt</button>
-                                            )}
-                                            <button 
-                                                onClick={() => handleToggleLock(u.email, !!u.isLocked)} 
-                                                className={`p-2 rounded-xl transition-all border ${u.isLocked ? 'bg-emerald-900/20 text-emerald-400 border-emerald-900/50 hover:bg-emerald-900/40' : 'bg-red-900/20 text-red-400 border-red-900/50 hover:bg-red-900/40'}`}
-                                                title={u.isLocked ? "Mở khóa" : "Khóa tài khoản"}
-                                            >
-                                                {u.isLocked ? <UserCheck size={16}/> : <UserX size={16}/>}
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-
-            {tab === 'keys' && (
-                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
-                    <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
-                        <h3 className="font-black text-white tracking-tighter">QUẢN LÝ KEY KÍCH HOẠT</h3>
-                        <div className="flex gap-2">
-                             <select value={selectedPlanForNewKey} onChange={e => setSelectedPlanForNewKey(e.target.value as PlanType)} className="bg-slate-800 text-white text-xs rounded-xl px-4 py-2 outline-none font-bold border border-slate-700">
-                                {Object.keys(PLANS).map(p => <option key={p} value={p}>{PLANS[p as PlanType].name}</option>)}
-                             </select>
-                             <button onClick={handleCreateKey} className="bg-blue-600 hover:bg-blue-500 px-5 py-2 rounded-xl text-xs font-black text-white shadow-lg shadow-blue-900/20">Tạo Key Mới</button>
+        <div className="min-h-screen bg-slate-950 p-8 flex flex-col items-center justify-center">
+            <div className="max-w-4xl w-full">
+                <div className="text-center mb-12">
+                    <h2 className="text-4xl font-black text-white mb-4">Nâng Cấp Tài Khoản</h2>
+                    <p className="text-slate-400">Chọn gói phù hợp để bắt đầu săn tìm PBN chất lượng cao</p>
+                    {user.subscriptionStatus === 'pending' && (
+                        <div className="mt-6 bg-yellow-500/10 border border-yellow-500/50 p-4 rounded-xl text-yellow-500 font-bold flex items-center justify-center gap-2">
+                            <Clock size={20}/> Yêu cầu kích hoạt gói "{PLANS[user.plan!].name}" đang chờ xử lý...
                         </div>
-                    </div>
-                    <table className="w-full text-left">
-                        <thead>
-                            <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
-                                <th className="p-6 border-b border-slate-800">Mã Key</th>
-                                <th className="p-6 border-b border-slate-800">Gói</th>
-                                <th className="p-6 border-b border-slate-800">Trạng thái</th>
-                                <th className="p-6 border-b border-slate-800 text-right">Xóa</th>
-                            </tr>
-                        </thead>
-                        <tbody className="text-sm text-slate-300">
-                            {keys.map(k => (
-                                <tr key={k.code} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                                    <td className="p-6 font-mono text-blue-400 font-black tracking-widest">{k.code}</td>
-                                    <td className="p-6 font-bold">{PLANS[k.plan].name}</td>
-                                    <td className="p-6">
-                                        {k.isUsed ? (
-                                            <div className="flex flex-col">
-                                                <span className="text-slate-500 text-xs flex items-center gap-1"><UserIcon size={12}/> Đã sử dụng bởi:</span>
-                                                <span className="text-white font-bold text-xs">{k.usedBy}</span>
-                                            </div>
-                                        ) : (
-                                            <span className="text-emerald-500 font-black text-[10px] uppercase flex items-center gap-1"><PlusCircle size={14}/> Sẵn sàng</span>
-                                        )}
-                                    </td>
-                                    <td className="p-6 text-right">
-                                        {!k.isUsed && <button onClick={() => handleDeleteKey(k.code)} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={18}/></button>}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                    )}
                 </div>
-            )}
 
-            {tab === 'bugs' && (
-                <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
-                    <table className="w-full text-left">
-                        <thead>
-                            <tr className="bg-slate-950 text-slate-500 text-[10px] uppercase font-black tracking-widest">
-                                <th className="p-6 border-b border-slate-800">Người báo cáo</th>
-                                <th className="p-6 border-b border-slate-800">Nội dung chi tiết</th>
-                                <th className="p-6 border-b border-slate-800">Thời gian gửi</th>
-                                <th className="p-6 border-b border-slate-800 text-right">Hành động</th>
-                            </tr>
-                        </thead>
-                        <tbody className="text-sm text-slate-300">
-                            {bugs.map(b => (
-                                <tr key={b.id} className={`border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors ${b.status === 'resolved' ? 'opacity-40' : ''}`}>
-                                    <td className="p-6 font-bold text-white">{b.email}</td>
-                                    <td className="p-6 whitespace-pre-wrap text-slate-400 text-xs italic">"{b.content}"</td>
-                                    <td className="p-6 text-xs font-mono font-bold text-slate-500">{new Date(b.createdAt).toLocaleString()}</td>
-                                    <td className="p-6 text-right">
-                                        <div className="flex justify-end gap-2">
-                                            {b.status === 'new' && (
-                                                <button onClick={() => { resolveBugReport(b.id); setRefresh(r => r+1); }} className="text-emerald-500 hover:bg-emerald-950/50 p-2 rounded-xl border border-transparent hover:border-emerald-900/50 transition-all"><Check size={20}/></button>
-                                            )}
-                                            <button onClick={() => { deleteBugReport(b.id); setRefresh(r => r+1); }} className="text-slate-600 hover:text-red-400 p-2 rounded-xl transition-all"><Trash2 size={18}/></button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                            {bugs.length === 0 && (
-                                <tr>
-                                    <td colSpan={4} className="p-20 text-center text-slate-600 font-bold uppercase tracking-widest bg-slate-950/20">Chưa có báo cáo lỗi mới</td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
+                <div className="grid md:grid-cols-3 gap-8">
+                    {(Object.keys(PLANS) as PlanType[]).map((key) => (
+                        <div key={key} className="bg-slate-900 border border-slate-800 p-8 rounded-[2rem] flex flex-col h-full hover:border-blue-500/50 transition-all shadow-xl group">
+                            <div className="mb-8">
+                                <h3 className="text-xl font-bold text-white mb-2">{PLANS[key].name}</h3>
+                                <div className="text-3xl font-black text-blue-500">{PLANS[key].price.toLocaleString()}đ</div>
+                                <div className="text-slate-500 text-xs mt-1 uppercase font-bold">{PLANS[key].durationDays} ngày sử dụng</div>
+                            </div>
+                            <ul className="space-y-4 mb-8 flex-1 text-sm text-slate-400">
+                                <li className="flex items-center gap-2"><Check size={16} className="text-emerald-500"/> Thu thập domain không giới hạn</li>
+                                <li className="flex items-center gap-2"><Check size={16} className="text-emerald-500"/> Full Metrics: DR, UR, TF, CF</li>
+                                <li className="flex items-center gap-2"><Check size={16} className="text-emerald-500"/> AI Audit chuyên sâu</li>
+                                <li className="flex items-center gap-2"><Check size={16} className="text-emerald-500"/> Xuất dữ liệu CSV</li>
+                            </ul>
+                            <button 
+                                onClick={() => handleSelectPlan(key)}
+                                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl transition-all shadow-lg shadow-blue-900/20 active:scale-95 group-hover:scale-105"
+                            >
+                                CHỌN GÓI NÀY
+                            </button>
+                        </div>
+                    ))}
                 </div>
-            )}
+
+                <div className="mt-12 text-center flex flex-col items-center gap-6">
+                    <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-lg">
+                        <p className="text-sm text-slate-400 mb-4">Mã thanh toán của bạn: <b className="text-white font-mono">{user.paymentCode}</b></p>
+                        <a 
+                            href="https://t.me/hima_dev" 
+                            target="_blank" 
+                            className="inline-flex items-center gap-2 bg-blue-600 px-6 py-3 rounded-xl font-black text-white hover:bg-blue-500 transition-all"
+                        >
+                            <Send size={18}/> GỬI MÃ KÍCH HOẠT QUA TELEGRAM
+                        </a>
+                    </div>
+                    <button onClick={onLogout} className="text-slate-500 hover:text-white flex items-center gap-2 font-bold transition-colors">
+                        <LogOut size={18}/> Đăng xuất
+                    </button>
+                </div>
+            </div>
         </div>
     );
 };
 
-// --- SUBSCRIPTION / PRICING ---
-export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLogout: () => void }> = ({ user, onUpdate, onLogout }) => {
-    const [selectedPlan, setSelectedPlan] = useState<PlanType | null>(null);
+// --- ADMIN DASHBOARD COMPONENT ---
+export const AdminDashboard: React.FC<{ onLogout: () => void, onGoToTool: () => void }> = ({ onLogout, onGoToTool }) => {
+    const [users, setUsers] = useState<User[]>([]);
+    const [keys, setKeys] = useState<AccessKey[]>([]);
+    const [bugs, setBugs] = useState<BugReport[]>([]);
+    const [activeTab, setActiveTab] = useState<'users' | 'keys' | 'bugs'>('users');
 
-    const handleSubscribe = () => {
-        if (selectedPlan) {
-            requestSubscription(user.email, selectedPlan);
-            onUpdate();
-        }
+    useEffect(() => {
+        const load = () => {
+            setUsers(getUsers());
+            setKeys(getAccessKeys());
+            setBugs(getBugReports());
+        };
+        load();
+        window.addEventListener('storage_sync', load);
+        return () => window.removeEventListener('storage_sync', load);
+    }, []);
+
+    const handleCreateKey = (plan: PlanType) => {
+        createAccessKey(plan);
+        setKeys(getAccessKeys());
     };
 
-    if (user.subscriptionStatus === 'pending') {
-        const planPrice = PLANS[user.plan!].price;
-        const qrUrl = `https://img.vietqr.io/image/VCB-cs6-compact.png?amount=${planPrice}&addInfo=${user.paymentCode}&accountName=DO%20NGOC%20THANH`;
-
-        return (
-            <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden border-t-4 border-t-yellow-500">
-                    <div className="p-6 text-center border-b border-slate-800">
-                         <h2 className="text-xl font-black text-white mb-1 uppercase tracking-tighter">THANH TOÁN & KÍCH HOẠT</h2>
-                         <p className="text-slate-500 text-xs">Vui lòng quét mã QR bên dưới để bắt đầu</p>
-                    </div>
-                    <div className="p-8 bg-white flex flex-col items-center">
-                        <img src={qrUrl} alt="VietQR" className="w-48 h-48 mb-6 shadow-xl rounded-lg" />
-                        <div className="w-full bg-slate-950 p-5 rounded-2xl text-xs space-y-3 text-slate-400 border border-slate-800">
-                             <div className="flex justify-between items-center"><span>Ngân hàng</span><span className="text-white font-black">Vietcombank</span></div>
-                             <div className="flex justify-between items-center"><span>Số tài khoản</span><span className="text-emerald-400 font-black text-sm tracking-wider">cs6</span></div>
-                             <div className="flex justify-between items-center"><span>Số tiền</span><span className="text-white font-black">{planPrice.toLocaleString()}đ</span></div>
-                             <div className="flex justify-between items-center bg-yellow-950/20 p-2 rounded-lg border border-yellow-900/30">
-                                <span>Nội dung CK</span>
-                                <span className="text-yellow-500 font-black text-sm tracking-widest">{user.paymentCode}</span>
-                             </div>
-                        </div>
-                    </div>
-
-                    <div className="px-6 py-4 border-t border-slate-800">
-                        <a 
-                            href="https://t.me/hima_dev" 
-                            target="_blank" 
-                            className="w-full bg-[#229ED9]/10 hover:bg-[#229ED9]/20 text-[#229ED9] py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-[#229ED9]/30 transition-all"
-                        >
-                            <Send size={16}/> LIÊN HỆ KÍCH HOẠT NHANH (TELEGRAM)
-                        </a>
-                    </div>
-
-                    <div className="p-5 bg-slate-900 flex gap-3">
-                        <button onClick={onUpdate} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 transition-all"><RefreshCw size={14}/> LÀM MỚI</button>
-                        <button onClick={onLogout} className="bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-white px-4 py-3 rounded-2xl transition-all border border-slate-700"><LogOut size={16}/></button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
     return (
-        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 relative overflow-hidden">
-             <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(37,99,235,0.05),transparent_70%)] pointer-events-none"></div>
-             
-             <div className="text-center mb-16 relative z-10">
-                <div className="inline-block bg-blue-600/10 border border-blue-600/20 px-4 py-1.5 rounded-full text-blue-400 text-[10px] font-black uppercase tracking-[0.3em] mb-4">Pricing Plans</div>
-                <h2 className="text-5xl font-black text-white mb-4 tracking-tighter">Mở khóa PBN Hunter Pro</h2>
-                <p className="text-slate-400 max-w-xl mx-auto font-medium">Chọn gói hội viên phù hợp để bắt đầu săn lùng những tên miền chất lượng cao nhất cho mạng lưới của bạn.</p>
-             </div>
-
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl w-full mb-12 relative z-10">
-                {(Object.keys(PLANS) as PlanType[]).map(key => (
-                    <div 
-                        key={key} 
-                        onClick={() => setSelectedPlan(key)} 
-                        className={`group bg-slate-900/50 backdrop-blur-sm p-8 rounded-[2.5rem] border-2 transition-all cursor-pointer relative overflow-hidden ${selectedPlan === key ? 'border-blue-600 bg-slate-900 shadow-[0_20px_50px_rgba(37,99,235,0.1)] scale-105' : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'}`}
-                    >
-                        {key === '1_year' && (
-                            <div className="absolute top-6 right-[-35px] bg-emerald-600 text-white text-[9px] font-black py-1 px-10 rotate-45 shadow-lg">BEST VALUE</div>
-                        )}
-                        <h3 className="text-2xl font-black text-white mb-2 uppercase tracking-tighter">{PLANS[key].name}</h3>
-                        <div className="flex items-baseline gap-1 mb-8">
-                            <span className="text-4xl font-black text-blue-500">{(PLANS[key].price / 1000).toLocaleString()}k</span>
-                            <span className="text-slate-500 font-bold text-sm uppercase tracking-widest">/ VNĐ</span>
-                        </div>
-                        
-                        <div className="space-y-4 mb-10">
-                            <div className="flex items-center gap-3 text-slate-300 text-sm font-medium">
-                                <Check size={16} className="text-blue-500 bg-blue-500/10 rounded-full p-0.5"/> 
-                                Full quyền quét 10k domain/lần
-                            </div>
-                            <div className="flex items-center gap-3 text-slate-300 text-sm font-medium">
-                                <Check size={16} className="text-blue-500 bg-blue-500/10 rounded-full p-0.5"/> 
-                                AI Audit không giới hạn
-                            </div>
-                            <div className="flex items-center gap-3 text-slate-300 text-sm font-medium">
-                                <Check size={16} className="text-blue-500 bg-blue-500/10 rounded-full p-0.5"/> 
-                                Support VIP 24/7
-                            </div>
-                        </div>
-
-                        <button className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${selectedPlan === key ? 'bg-blue-600 text-white shadow-xl shadow-blue-900/40' : 'bg-slate-800 text-slate-500 group-hover:bg-slate-700 group-hover:text-slate-300'}`}>
-                            {selectedPlan === key ? 'Đã chọn gói' : 'Chọn gói này'}
-                        </button>
-                    </div>
-                ))}
-             </div>
-
-             <div className="relative z-10 w-full max-w-xs mb-12">
-                <a 
-                    href="https://t.me/hima_dev" 
-                    target="_blank" 
-                    className="w-full bg-[#229ED9]/10 hover:bg-[#229ED9]/20 text-[#229ED9] py-3.5 rounded-2xl text-xs font-black flex items-center justify-center gap-2 border border-[#229ED9]/30 transition-all hover:scale-105"
-                >
-                    <Send size={18}/> HỖ TRỢ CHỌN GÓI (TELEGRAM)
-                </a>
-             </div>
-
-             {selectedPlan && (
-                <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-full max-w-2xl px-6 z-50 animate-in fade-in slide-in-from-bottom-10">
-                    <div className="bg-slate-900/90 backdrop-blur-2xl border border-blue-500/50 p-6 rounded-3xl shadow-[0_30px_60px_rgba(0,0,0,0.5)] flex items-center justify-between gap-6">
-                        <div className="flex flex-col">
-                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Thanh toán cho gói:</span>
-                            <span className="text-white font-black text-xl uppercase tracking-tighter">{PLANS[selectedPlan].name} — <span className="text-blue-500">{PLANS[selectedPlan].price.toLocaleString()}đ</span></span>
-                        </div>
-                        <div className="flex gap-3">
-                            <button onClick={() => setSelectedPlan(null)} className="text-slate-500 font-black text-xs uppercase hover:text-white px-4 transition-colors">Hủy</button>
-                            <button onClick={handleSubscribe} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center gap-2 shadow-xl shadow-blue-900/30 transition-all hover:scale-105 active:scale-95">
-                                <CreditCard size={16}/> TIẾP TỤC THANH TOÁN
-                            </button>
-                        </div>
-                    </div>
+        <div className="min-h-screen bg-slate-950 text-slate-200">
+            <header className="h-20 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-12 sticky top-0 z-50">
+                <div className="flex items-center gap-4">
+                    <div className="bg-red-600 p-2 rounded-xl text-white"><Shield size={24}/></div>
+                    <h2 className="text-2xl font-black text-white">ADMIN <span className="text-red-500">CONTROL</span></h2>
                 </div>
-             )}
-             <button onClick={onLogout} className="mt-8 text-slate-600 hover:text-slate-400 font-bold text-xs uppercase tracking-widest transition-colors">Đăng xuất khỏi tài khoản</button>
+                <div className="flex items-center gap-4">
+                    <button onClick={onGoToTool} className="bg-blue-600 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-blue-500 transition-all"><Database size={18}/> VÀO TOOL</button>
+                    <button onClick={onLogout} className="bg-slate-800 text-slate-400 p-2 rounded-xl border border-slate-700 hover:text-white transition-all"><LogOut size={20}/></button>
+                </div>
+            </header>
+
+            <main className="p-12 max-w-[1600px] mx-auto">
+                <div className="flex gap-4 mb-8">
+                    {['users', 'keys', 'bugs'].map((tab) => (
+                        <button 
+                            key={tab}
+                            onClick={() => setActiveTab(tab as any)}
+                            className={`px-8 py-3 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'bg-slate-900 text-slate-500 hover:text-slate-300'}`}
+                        >
+                            {tab === 'users' ? 'Người dùng' : tab === 'keys' ? 'Mã Access Key' : 'Báo cáo lỗi'}
+                        </button>
+                    ))}
+                </div>
+
+                {activeTab === 'users' && (
+                    <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden">
+                        <table className="w-full text-left">
+                            <thead className="bg-slate-950 text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">
+                                <tr>
+                                    <th className="p-6">User / Email</th>
+                                    <th className="p-6">Status</th>
+                                    <th className="p-6">Plan</th>
+                                    <th className="p-6">Hết hạn</th>
+                                    <th className="p-6 text-right">Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/50">
+                                {users.map(u => (
+                                    <tr key={u.email} className="hover:bg-slate-800/30">
+                                        <td className="p-6">
+                                            <div className="font-bold text-white">{u.email}</div>
+                                            <div className="text-[10px] text-slate-500 font-mono mt-1">ID: {u.paymentCode}</div>
+                                        </td>
+                                        <td className="p-6">
+                                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase ${u.subscriptionStatus === 'active' ? 'bg-emerald-500/10 text-emerald-500' : u.subscriptionStatus === 'pending' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-slate-800 text-slate-500'}`}>
+                                                {u.subscriptionStatus}
+                                            </span>
+                                        </td>
+                                        <td className="p-6 text-sm font-bold text-slate-300">{u.plan ? PLANS[u.plan].name : 'N/A'}</td>
+                                        <td className="p-6 text-xs text-slate-500 font-mono">{u.expiryDate ? new Date(u.expiryDate).toLocaleDateString() : '∞'}</td>
+                                        <td className="p-6 text-right space-x-2">
+                                            <button onClick={() => toggleLockUser(u.email)} className={`p-2 rounded-lg transition-all ${u.isLocked ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-red-500'}`} title={u.isLocked ? 'Mở khóa' : 'Khóa tài khoản'}>
+                                                {u.isLocked ? <UserCheck size={18}/> : <UserX size={18}/>}
+                                            </button>
+                                            {u.subscriptionStatus !== 'active' ? (
+                                                <button onClick={() => approveUser(u.email)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-emerald-500">Active</button>
+                                            ) : (
+                                                <button onClick={() => revokeUser(u.email)} className="bg-slate-800 text-red-500 px-4 py-2 rounded-lg text-xs font-bold border border-slate-700 hover:bg-red-950">Revoke</button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {activeTab === 'keys' && (
+                    <div className="space-y-6">
+                        <div className="flex gap-4 mb-8">
+                            {(Object.keys(PLANS) as PlanType[]).map(p => (
+                                <button key={p} onClick={() => handleCreateKey(p)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2"><PlusCircle size={18}/> Tạo Key {PLANS[p].name}</button>
+                            ))}
+                        </div>
+                        <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-950 text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">
+                                    <tr>
+                                        <th className="p-6">Access Key</th>
+                                        <th className="p-6">Gói</th>
+                                        <th className="p-6">Tình trạng</th>
+                                        <th className="p-6">Người dùng</th>
+                                        <th className="p-6 text-right">Xóa</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800/50">
+                                    {keys.map(k => (
+                                        <tr key={k.code}>
+                                            <td className="p-6 font-mono font-bold text-blue-400">{k.code}</td>
+                                            <td className="p-6 text-sm font-bold text-slate-300">{PLANS[k.plan].name}</td>
+                                            <td className="p-6">
+                                                <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase ${k.isUsed ? 'bg-red-500/10 text-red-500' : 'bg-emerald-500/10 text-emerald-500'}`}>
+                                                    {k.isUsed ? 'Đã dùng' : 'Chưa dùng'}
+                                                </span>
+                                            </td>
+                                            <td className="p-6 text-xs text-slate-500">{k.usedBy || '-'}</td>
+                                            <td className="p-6 text-right">
+                                                <button onClick={() => { deleteAccessKey(k.code); setKeys(getAccessKeys()); }} className="text-slate-500 hover:text-red-500 transition-colors p-2"><Trash2 size={18}/></button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'bugs' && (
+                    <div className="grid grid-cols-1 gap-4">
+                        {bugs.length === 0 && <div className="p-20 text-center text-slate-500 font-bold uppercase tracking-widest">Không có báo cáo lỗi nào.</div>}
+                        {bugs.map(b => (
+                            <div key={b.id} className="bg-slate-900 border border-slate-800 p-8 rounded-3xl flex justify-between items-start gap-8">
+                                <div className="space-y-4 flex-1">
+                                    <div className="flex items-center gap-4">
+                                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase ${b.status === 'new' ? 'bg-red-500 text-white' : 'bg-emerald-500/10 text-emerald-500'}`}>{b.status}</span>
+                                        <span className="text-sm font-bold text-white">{b.email}</span>
+                                        <span className="text-xs text-slate-500 font-mono">{new Date(b.createdAt).toLocaleString()}</span>
+                                    </div>
+                                    <p className="text-slate-300 bg-slate-950 p-6 rounded-2xl border border-slate-800 font-medium leading-relaxed">{b.content}</p>
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    {b.status === 'new' && (
+                                        <button onClick={() => { resolveBugReport(b.id); setBugs(getBugReports()); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-500 transition-all"><Check size={18}/> XONG</button>
+                                    )}
+                                    <button onClick={() => { deleteBugReport(b.id); setBugs(getBugReports()); }} className="bg-slate-800 text-slate-400 px-6 py-3 rounded-xl font-bold border border-slate-700 hover:text-red-500 transition-all">Xóa</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </main>
         </div>
     );
 };
