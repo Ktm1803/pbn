@@ -409,6 +409,17 @@ export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLo
                              </div>
                         </div>
                     </div>
+
+                    <div className="px-6 py-4 border-t border-slate-800">
+                        <a 
+                            href="https://t.me/hima_dev" 
+                            target="_blank" 
+                            className="w-full bg-[#229ED9]/10 hover:bg-[#229ED9]/20 text-[#229ED9] py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-[#229ED9]/30 transition-all"
+                        >
+                            <Send size={16}/> LIÊN HỆ KÍCH HOẠT NHANH (TELEGRAM)
+                        </a>
+                    </div>
+
                     <div className="p-5 bg-slate-900 flex gap-3">
                         <button onClick={onUpdate} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-900/20 transition-all"><RefreshCw size={14}/> LÀM MỚI</button>
                         <button onClick={onLogout} className="bg-slate-800 hover:bg-red-900/50 text-slate-400 hover:text-white px-4 py-3 rounded-2xl transition-all border border-slate-700"><LogOut size={16}/></button>
@@ -428,7 +439,7 @@ export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLo
                 <p className="text-slate-400 max-w-xl mx-auto font-medium">Chọn gói hội viên phù hợp để bắt đầu săn lùng những tên miền chất lượng cao nhất cho mạng lưới của bạn.</p>
              </div>
 
-             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl w-full mb-24 relative z-10">
+             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl w-full mb-12 relative z-10">
                 {(Object.keys(PLANS) as PlanType[]).map(key => (
                     <div 
                         key={key} 
@@ -464,6 +475,16 @@ export const SubscriptionPlan: React.FC<{ user: User, onUpdate: () => void, onLo
                         </button>
                     </div>
                 ))}
+             </div>
+
+             <div className="relative z-10 w-full max-w-xs mb-12">
+                <a 
+                    href="https://t.me/hima_dev" 
+                    target="_blank" 
+                    className="w-full bg-[#229ED9]/10 hover:bg-[#229ED9]/20 text-[#229ED9] py-3.5 rounded-2xl text-xs font-black flex items-center justify-center gap-2 border border-[#229ED9]/30 transition-all hover:scale-105"
+                >
+                    <Send size={18}/> HỖ TRỢ CHỌN GÓI (TELEGRAM)
+                </a>
              </div>
 
              {selectedPlan && (

