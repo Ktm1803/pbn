@@ -3,14 +3,14 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { StepIndicator } from './components/StepIndicator';
 import { FilterControl } from './components/FilterControl';
 import { Step, DomainEntity, DomainStatus, FilterConfig, User, PLANS, MarketplaceType } from './types';
-import { analyzeDomainBatch, generateMockDomains } from './services/geminiService';
+import { analyzeDomainBatch, generateMockDomains, checkWaybackBatch } from './services/geminiService';
 import { getCurrentUser, logout, submitBugReport } from './services/authService';
 import { AuthForm, SubscriptionPlan, AdminDashboard } from './components/AuthComponents';
 import { 
   Play, Settings, CheckCircle2, AlertTriangle, Download, RefreshCw, Search, Bot, 
   Globe, ShieldCheck, Filter, PlusCircle, DollarSign, History, ExternalLink, 
   ShoppingCart, CheckSquare, Square, X, XCircle, LogOut, Smartphone, Shield, 
-  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy
+  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive
 } from 'lucide-react';
 
 const REG_FEES: Record<string, number> = {
@@ -44,7 +44,14 @@ export default function App() {
   const [filterConfig, setFilterConfig] = useState<FilterConfig>({
     minDR: 10, minUR: 10, minRD: 5, minTF: 5, minCF: 5, 
     maxPrice: 35, 
-    excludeAdult: true, excludeGambling: true, allowedTLDs: [],
+    excludeAdult: true, excludeGambling: true, excludeHyphenDomains: true,
+    requireArchiveHistory: true,
+    minArchiveSnapshots: 5,
+    maxArchiveFirstSeenYear: 2021,
+    enableDeepWaybackAudit: true,
+    excludeWayback301Spam: true,
+    excludeWaybackForeignLanguageSpam: true,
+    allowedTLDs: [],
   });
   const [allowedMarketplaces, setAllowedMarketplaces] = useState<MarketplaceType[]>(['SAV', 'Namecheap', 'Registry']);
 
@@ -115,7 +122,8 @@ export default function App() {
       const newBatch: DomainEntity[] = [];
       for (let i = 0; i < batchSize && processed < scanLimit; i++) {
         processed++;
-        const nameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
+        const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
+        const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
         const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)];
         
         // Cập nhật: Tránh tạo ra chuỗi số dài (ví dụ: -792642). 
@@ -123,8 +131,32 @@ export default function App() {
         const suffix = Math.random() > 0.6 ? getRandomInt(1, 99) : '';
         const fullUrl = `${nameRoot}${suffix}${randomTLD}`;
         
-        const archiveSnapshots = getRandomInt(0, 1000);
-        if (archiveSnapshots <= 0) continue; 
+        // Tỉ lệ khoảng 15% domain chưa từng được lưu vết trên archive.org (archiveSnapshots = 0)
+        const hasHistoryRoll = Math.random() > 0.15;
+        const archiveSnapshots = hasHistoryRoll ? getRandomInt(1, 1500) : 0;
+        const archiveFirstSeen = archiveSnapshots > 0 ? getRandomInt(2001, 2024) : 0;
+        
+        // Thuật toán kiểm tra lịch sử Wayback Machine (web.archive.org)
+        const waybackSpamFlags: string[] = [];
+        if (archiveSnapshots === 0) {
+          waybackSpamFlags.push('No Wayback Archive Found');
+        } else {
+          if (Math.random() < 0.16) waybackSpamFlags.push('301 Redirect Spam');
+          if (Math.random() < 0.14) waybackSpamFlags.push('Foreign Language Shift');
+          if (Math.random() < 0.10) waybackSpamFlags.push('PBN Network Footprint');
+          if (Math.random() < 0.08) waybackSpamFlags.push('Gambling / Adult History');
+        }
+
+        let waybackScore = archiveSnapshots > 0 ? 100 : 0;
+        if (archiveSnapshots > 0) {
+          if (archiveSnapshots < 5) waybackScore -= 25;
+          else if (archiveSnapshots < 15) waybackScore -= 10;
+          if (archiveFirstSeen > 2021) waybackScore -= 15;
+          waybackScore -= (waybackSpamFlags.length * 30);
+          if (waybackScore < 0) waybackScore = 0;
+        }
+
+        const waybackClean = archiveSnapshots > 0 && waybackSpamFlags.length === 0 && waybackScore >= 60;
 
         const marketRoll = Math.random();
         let marketplace: MarketplaceType = 'Registry';
@@ -147,8 +179,9 @@ export default function App() {
             dr: getRandomInt(0, 70), ur: getRandomInt(0, 50), rd: getRandomInt(0, 500),
             tf: getRandomInt(0, 45), cf: getRandomInt(0, 45), traffic: getRandomInt(0, 30000),
             anchorStatus: Math.random() > 0.3 ? 'Clean' : 'Spam', indexed: Math.random() > 0.3,
-            waybackClean: Math.random() > 0.2, archiveSnapshots, archiveFirstSeen: getRandomInt(2000, 2021),
-            status: DomainStatus.Pending, checkProgress: 0, age: 2025 - getRandomInt(2000, 2021),
+            waybackClean, waybackScore, waybackSpamFlags,
+            archiveSnapshots, archiveFirstSeen,
+            status: DomainStatus.Pending, checkProgress: 0, age: archiveFirstSeen > 0 ? 2026 - archiveFirstSeen : 0,
             isExpired: !isAuction, price, marketplace, isAuction,
             auctionEndsAt: isAuction ? Date.now() + getRandomInt(3600000, 86400000 * 5) : undefined,
             bidCount: isAuction ? getRandomInt(0, 50) : undefined
@@ -161,48 +194,116 @@ export default function App() {
     runBatch();
   };
 
-  const applyFilters = () => {
+  const applyFilters = async () => {
     setIsProcessing(true);
-    setTimeout(() => {
-      setDomains(prev => prev.map(d => {
-        const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && d.price <= filterConfig.maxPrice;
-        const meetsMarket = allowedMarketplaces.includes(d.marketplace);
-        return { ...d, status: (meetsMetrics && meetsMarket) ? DomainStatus.Analyzing : DomainStatus.Spam };
-      }));
-      setIsProcessing(false);
-      setCurrentStep(Step.PenaltyCheck);
-    }, 1000);
+    
+    // Bước 1: Lọc dữ liệu thô
+    const updated = domains.map(d => {
+      const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && d.price <= filterConfig.maxPrice;
+      const meetsMarket = allowedMarketplaces.includes(d.marketplace);
+      const passesHyphenCheck = filterConfig.excludeHyphenDomains ? !d.url.includes('-') : true;
+      
+      // Bắt buộc phải có bản lưu snapshot trên web.archive.org (archiveSnapshots >= 1 & archiveFirstSeen > 0)
+      const hasArchiveHistory = d.archiveSnapshots >= 1 && d.archiveFirstSeen > 0 && !d.waybackSpamFlags.includes('No Wayback Archive Found');
+      const passesSnapshots = d.archiveSnapshots >= Math.max(1, filterConfig.minArchiveSnapshots);
+      const passesFirstSeen = d.archiveFirstSeen > 0 && (d.archiveFirstSeen <= filterConfig.maxArchiveFirstSeenYear);
+
+      const isValidCandidate = meetsMetrics && meetsMarket && passesHyphenCheck && hasArchiveHistory && passesSnapshots && passesFirstSeen;
+
+      return { 
+        ...d, 
+        status: isValidCandidate ? DomainStatus.Analyzing : DomainStatus.Spam 
+      };
+    });
+
+    setDomains(updated);
+    setCurrentStep(Step.PenaltyCheck);
+
+    // Bước 2: Chạy kiểm tra sâu Wayback API cho các ứng viên
+    await runPenaltyCheckForDomains(updated);
   };
 
-  const runPenaltyCheck = useCallback(() => {
+  const runPenaltyCheckForDomains = async (domainList: DomainEntity[]) => {
     setIsProcessing(true);
-    const candidates = domains.filter(d => d.status === DomainStatus.Analyzing);
-    if (candidates.length === 0) { setIsProcessing(false); setCurrentStep(Step.Output); return; }
+    const candidates = domainList.filter(d => d.status === DomainStatus.Analyzing);
+    if (candidates.length === 0) {
+      setIsProcessing(false);
+      setCurrentStep(Step.Output);
+      return;
+    }
     
-    let checked = 0;
-    const processBatch = () => {
-        setDomains(prev => {
-            const next = [...prev];
-            let batch = 0;
-            for(let i=0; i < next.length && batch < 50; i++) {
-                if(next[i].status === DomainStatus.Analyzing) {
-                    next[i].status = (next[i].indexed && next[i].waybackClean) ? DomainStatus.Clean : DomainStatus.Penalized;
-                    batch++; checked++;
-                }
-            }
-            return next;
-        });
-        if (checked < candidates.length) requestAnimationFrame(processBatch);
-        else { setIsProcessing(false); setCurrentStep(Step.Output); }
-    };
-    processBatch();
+    // Gọi API kiểm tra xem tên miền có thực sự tồn tại bản lưu trên web.archive.org không
+    const urlsToCheck = candidates.slice(0, 50).map(d => d.url);
+    const waybackResults = await checkWaybackBatch(urlsToCheck);
+
+    const finalDomains = domainList.map(d => {
+      if (d.status !== DomainStatus.Analyzing) return d;
+
+      const wb = waybackResults[d.url];
+      let archiveSnapshots = d.archiveSnapshots;
+      let archiveFirstSeen = d.archiveFirstSeen;
+      let waybackSpamFlags = [...d.waybackSpamFlags];
+      let waybackScore = d.waybackScore;
+      let waybackClean = d.waybackClean;
+
+      // Nếu API trả về kết quả cụ thể
+      if (wb) {
+        if (wb.available && wb.snapshotsCount && wb.snapshotsCount >= 1) {
+          archiveSnapshots = wb.snapshotsCount;
+          archiveFirstSeen = wb.firstSeenYear || 2018;
+          waybackSpamFlags = waybackSpamFlags.filter(f => f !== 'No Wayback Archive Found');
+        } else {
+          // BỊ BÁO LỖI: "Wayback Machine has not archived that URL" -> 0 Snapshots -> Loại bỏ ngay!
+          archiveSnapshots = 0;
+          archiveFirstSeen = 0;
+          if (!waybackSpamFlags.includes('No Wayback Archive Found')) {
+            waybackSpamFlags.push('No Wayback Archive Found');
+          }
+          waybackScore = 0;
+          waybackClean = false;
+        }
+      }
+
+      const has301Spam = waybackSpamFlags.includes('301 Redirect Spam');
+      const hasLangSpam = waybackSpamFlags.includes('Foreign Language Shift');
+      const hasPbnSpam = waybackSpamFlags.some(f => f.includes('PBN') || f.includes('Gambling'));
+      
+      // Tuyệt đối không cho phép domain không có ảnh / snapshot archive.org (archiveSnapshots < 1)
+      const hasNoArchive = archiveSnapshots < 1 || archiveFirstSeen <= 0 || waybackSpamFlags.includes('No Wayback Archive Found');
+
+      const passes301 = !filterConfig.excludeWayback301Spam || !has301Spam;
+      const passesLang = !filterConfig.excludeWaybackForeignLanguageSpam || !hasLangSpam;
+      const passesDeepAudit = !filterConfig.enableDeepWaybackAudit || (waybackClean && !hasPbnSpam);
+
+      // Domain Cổ hợp lệ = Đã index + Có ít nhất 1 snapshot trên Archive.org + Không dính spam + Score >= 50
+      const isClean = d.indexed && !hasNoArchive && passes301 && passesLang && passesDeepAudit && (waybackScore >= 50);
+
+      return {
+        ...d,
+        archiveSnapshots,
+        archiveFirstSeen,
+        waybackSpamFlags,
+        waybackScore: hasNoArchive ? 0 : waybackScore,
+        waybackClean: !hasNoArchive && waybackClean,
+        age: archiveFirstSeen > 0 ? 2026 - archiveFirstSeen : 0,
+        status: isClean ? DomainStatus.Clean : DomainStatus.Penalized
+      };
+    });
+
+    setDomains(finalDomains);
+    setIsProcessing(false);
+    setCurrentStep(Step.Output);
+  };
+
+  const cleanDomains = useMemo(() => {
+    return domains.filter(d => 
+      d.status === DomainStatus.Clean && 
+      d.archiveSnapshots >= 1 && 
+      d.archiveFirstSeen > 0 && 
+      !d.waybackSpamFlags.includes('No Wayback Archive Found') &&
+      d.waybackScore >= 50
+    );
   }, [domains]);
-
-  useEffect(() => {
-    if (currentStep === Step.PenaltyCheck && !isProcessing) runPenaltyCheck();
-  }, [currentStep, isProcessing, runPenaltyCheck]);
-
-  const cleanDomains = useMemo(() => domains.filter(d => d.status === DomainStatus.Clean), [domains]);
   
   const deleteSelected = () => {
     if (selectedIds.size === 0) return;
@@ -281,6 +382,97 @@ export default function App() {
                 <FilterControl label="Trust Flow (TF)" min={0} max={100} value={filterConfig.minTF} onChange={v => setFilterConfig({...filterConfig, minTF: v})}/>
                 <FilterControl label="Ngân sách tối đa ($)" min={5} max={1000} value={filterConfig.maxPrice} onChange={v => setFilterConfig({...filterConfig, maxPrice: v})} colorClass="bg-emerald-500"/>
                 
+                <div className="mt-8 bg-slate-950 p-6 rounded-3xl border border-slate-800 space-y-4">
+                  <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest flex items-center gap-2">
+                    <History className="text-blue-400" size={16}/> Thuật toán lọc Wayback Machine (web.archive.org)
+                  </label>
+
+                  <label className="flex items-center justify-between cursor-pointer group p-3.5 bg-blue-950/70 hover:bg-blue-900/70 rounded-2xl border border-blue-700/80 transition-colors shadow-lg shadow-blue-950/40">
+                    <div>
+                      <span className="text-sm font-black text-blue-200 group-hover:text-white transition-colors flex items-center gap-2">
+                        <History size={18} className="text-blue-400 animate-pulse"/> Loại bỏ domain không có lịch sử web.archive.org
+                      </span>
+                      <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                        Tự động <b>loại bỏ hoàn toàn</b> các tên miền báo lỗi <span className="text-amber-300 font-mono">"Wayback Machine has not archived that URL"</span> hoặc <span className="text-amber-300 font-mono">"No URLs captured"</span> (0 Snapshots).
+                      </p>
+                    </div>
+                    <input 
+                      type="checkbox" 
+                      checked={filterConfig.requireArchiveHistory} 
+                      onChange={e => setFilterConfig({...filterConfig, requireArchiveHistory: e.target.checked})} 
+                      className="accent-blue-500 w-5 h-5 cursor-pointer rounded flex-shrink-0 ml-3"
+                    />
+                  </label>
+
+                  <FilterControl 
+                    label="Snapshots Archive.org tối thiểu" 
+                    min={1} 
+                    max={100} 
+                    value={filterConfig.minArchiveSnapshots} 
+                    onChange={v => setFilterConfig({...filterConfig, minArchiveSnapshots: v})}
+                    description="Loại bỏ domain có quá ít bản lưu vết trên Archive.org"
+                  />
+
+                  <FilterControl 
+                    label="Năm xuất hiện lần đầu (First Seen) tối đa" 
+                    min={2005} 
+                    max={2024} 
+                    value={filterConfig.maxArchiveFirstSeenYear} 
+                    onChange={v => setFilterConfig({...filterConfig, maxArchiveFirstSeenYear: v})}
+                    description="Yêu cầu domain phải có lịch sử tồn tại lâu đời trước năm lựa chọn"
+                  />
+
+                  <div className="pt-2 border-t border-slate-800/80 space-y-3">
+                    <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
+                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <ShieldAlert size={16} className="text-amber-400"/> Lọc 301 Redirect & Parked Domain Spam
+                      </span>
+                      <input 
+                        type="checkbox" 
+                        checked={filterConfig.excludeWayback301Spam} 
+                        onChange={e => setFilterConfig({...filterConfig, excludeWayback301Spam: e.target.checked})} 
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
+                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <Globe size={16} className="text-purple-400"/> Lọc Đổi Ngôn Ngữ Bất Thường (Chinese/Japanese Gambling)
+                      </span>
+                      <input 
+                        type="checkbox" 
+                        checked={filterConfig.excludeWaybackForeignLanguageSpam} 
+                        onChange={e => setFilterConfig({...filterConfig, excludeWaybackForeignLanguageSpam: e.target.checked})} 
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
+                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <Bug size={16} className="text-blue-400"/> Kích hoạt Deep Wayback Audit (Phát hiện Footprint PBN)
+                      </span>
+                      <input 
+                        type="checkbox" 
+                        checked={filterConfig.enableDeepWaybackAudit} 
+                        onChange={e => setFilterConfig({...filterConfig, enableDeepWaybackAudit: e.target.checked})} 
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
+                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <XCircle size={18} className="text-red-400"/> Loại bỏ toàn bộ domain chứa dấu gạch ngang (-)
+                      </span>
+                      <input 
+                        type="checkbox" 
+                        checked={filterConfig.excludeHyphenDomains} 
+                        onChange={e => setFilterConfig({...filterConfig, excludeHyphenDomains: e.target.checked})} 
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                      />
+                    </label>
+                  </div>
+                </div>
+
                 <div className="mt-8 bg-slate-950 p-6 rounded-3xl border border-slate-800">
                   <label className="text-xs font-bold text-slate-500 mb-4 block uppercase tracking-widest">Sàn giao dịch hỗ trợ</label>
                   <div className="flex gap-8">
@@ -296,7 +488,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                <button onClick={applyFilters} className="w-full bg-emerald-600 p-6 rounded-[2rem] font-black text-white mt-12 hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-900/20 active:scale-95">XÁC NHẬN & CHẠY BỘ LỌC</button>
+                <button onClick={applyFilters} className="w-full bg-emerald-600 p-6 rounded-[2rem] font-black text-white mt-12 hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-900/20 active:scale-95">XÁC NHẬN & CHẠY BỘ LỌC WAYBACK</button>
             </div>
         );
       case Step.PenaltyCheck:
@@ -378,17 +570,42 @@ export default function App() {
                                     </div>
                                 </td>
                                 <td className="p-6"><div className="font-mono font-black text-emerald-400 text-2xl">${d.price}</div></td>
-                                <td className="p-6 text-[10px] text-slate-400 font-mono space-y-0.5">
-                                    <div className="flex justify-between w-28">Snapshots: <b className="text-white">{d.archiveSnapshots}</b></div>
-                                    <div className="flex justify-between w-28">Tuổi: <b className="text-white">{d.age}y</b></div>
-                                    <div className="flex justify-between w-28">Bắt đầu: <b className="text-white">{d.archiveFirstSeen}</b></div>
+                                <td className="p-6 text-[10px] text-slate-400 font-mono space-y-1.5">
+                                    <div className="font-sans font-black text-blue-300 text-[11px] flex items-center gap-1.5">
+                                      <History size={13} className="text-blue-400 flex-shrink-0"/>
+                                      <span>Saved <b className="text-white">{d.archiveSnapshots}</b> times</span>
+                                    </div>
+                                    <div className="text-[10px] text-slate-300 bg-slate-950/80 px-2.5 py-1 rounded-lg border border-slate-800 flex justify-between items-center">
+                                      <span>Lịch sử:</span>
+                                      <b className="text-emerald-400 font-mono">{d.archiveFirstSeen} — 2026</b>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-1 pt-0.5">
+                                        <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold flex items-center gap-1 border ${
+                                          d.waybackScore >= 80 
+                                            ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/80' 
+                                            : d.waybackScore >= 60 
+                                            ? 'bg-amber-950/60 text-amber-400 border-amber-800/80' 
+                                            : 'bg-red-950/60 text-red-400 border-red-800/80'
+                                        }`}>
+                                            Score: {d.waybackScore}/100
+                                        </span>
+                                        <a href={`https://web.archive.org/web/*/${d.url}`} target="_blank" rel="noreferrer" className="text-[9px] font-bold text-blue-400 hover:text-blue-300 underline flex items-center gap-0.5">
+                                          Xem Wayback ↗
+                                        </a>
+                                    </div>
+                                    {d.waybackSpamFlags && d.waybackSpamFlags.length > 0 && (
+                                      <div className="text-[8px] text-amber-400/90 font-sans italic truncate max-w-[150px]" title={d.waybackSpamFlags.join(', ')}>
+                                        ⚠️ {d.waybackSpamFlags.join(', ')}
+                                      </div>
+                                    )}
                                 </td>
                                 <td className="p-6">
                                     <div className="grid grid-cols-2 gap-2 max-w-[320px] mx-auto">
                                         <a href={`https://transparencyreport.google.com/safe-browsing/search?url=${d.url}`} target="_blank" className="bg-slate-800 hover:bg-emerald-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-emerald-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><ShieldCheck size={12}/> GOOGLE SAFE</a>
                                         <a href={`https://web.archive.org/web/*/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-blue-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-blue-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><History size={12}/> WAYBACK</a>
                                         <a href={`https://www.virustotal.com/gui/domain/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-indigo-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-indigo-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><Bug size={12}/> VIRUSTOTAL</a>
-                                        <a href={`https://sitecheck.sucuri.net/results/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-red-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-red-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><ShieldAlert size={12}/> SUCURI</a>
+                                        <a href={`https://archive.is/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-amber-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-amber-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><Archive size={12}/> ARCHIVE.IS</a>
+                                         <a href={`https://sitecheck.sucuri.net/results/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-red-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-red-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all col-span-2"><ShieldAlert size={12}/> SUCURI SECURE</a>
                                     </div>
                                 </td>
                                 <td className="p-6 text-right">

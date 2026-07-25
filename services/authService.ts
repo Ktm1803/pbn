@@ -1,6 +1,4 @@
-
 import { User, PlanType, PLANS, AccessKey, BugReport } from "../types";
-import { GoogleGenAI } from "@google/genai";
 
 const USERS_KEY = 'pbn_hunter_users';
 const KEYS_KEY = 'pbn_hunter_access_keys';
@@ -9,9 +7,6 @@ const BUGS_KEY = 'pbn_hunter_bug_reports';
 
 // Kênh đồng bộ hóa dữ liệu giữa các tab/cửa sổ (Cập nhật Admin Dashboard tức thì)
 const authChannel = new BroadcastChannel('pbn_auth_sync');
-
-// Khởi tạo AI để soạn thảo email
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
  * GIẢ LẬP GỬI EMAIL
@@ -25,16 +20,16 @@ const simulateEmailSend = async (to: string, subject: string, body: string) => {
     return new Promise((resolve) => setTimeout(resolve, 1500)); 
 };
 
-// Tạo nội dung email chuyên nghiệp bằng AI
+// Tạo nội dung email chuyên nghiệp bằng AI qua Server API
 const generateEmailBody = async (type: 'USER', data: any) => {
-    const prompt = `Viết một email chào mừng ngắn gọn, chuyên nghiệp và nồng nhiệt gửi cho người dùng vừa tham gia PBN Hunter Pro. Email của họ là: ${data.email}. Nhắc họ liên hệ Admin nếu cần hỗ trợ kích hoạt gói qua Telegram @hima_dev.`;
-    
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
+        const response = await fetch("/api/generate-email-body", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: data.email }),
         });
-        return response.text || `Chào mừng ${data.email} đến với PBN Hunter Pro!`;
+        const resData = await response.json();
+        return resData.body || `Chào mừng ${data.email} đến với PBN Hunter Pro!`;
     } catch (e) {
         return `Chào mừng bạn đến với PBN Hunter Pro! Tài khoản: ${data.email}`;
     }

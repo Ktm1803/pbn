@@ -26,6 +26,13 @@ export interface FilterConfig {
   maxPrice: number;
   excludeAdult: boolean;
   excludeGambling: boolean;
+  excludeHyphenDomains: boolean;
+  minArchiveSnapshots: number;
+  maxArchiveFirstSeenYear: number;
+  requireArchiveHistory: boolean;
+  enableDeepWaybackAudit: boolean;
+  excludeWayback301Spam: boolean;
+  excludeWaybackForeignLanguageSpam: boolean;
   allowedTLDs: string[];
 }
 
@@ -41,6 +48,8 @@ export interface DomainEntity {
   anchorStatus: 'Clean' | 'Spam' | 'Mixed';
   indexed: boolean;
   waybackClean: boolean;
+  waybackScore: number;
+  waybackSpamFlags: string[];
   archiveSnapshots: number; 
   archiveFirstSeen: number; 
   status: DomainStatus;

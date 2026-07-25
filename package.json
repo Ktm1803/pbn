@@ -1,26 +1,29 @@
-
 {
   "name": "pbn-hunter-pro",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "start": "node dist/server.cjs"
   },
   "dependencies": {
     "@google/genai": "^1.30.1",
+    "express": "^5.2.1",
     "lucide-react": "^0.454.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.13.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.7.5",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.3",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.22.4",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }
