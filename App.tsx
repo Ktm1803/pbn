@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StepIndicator } from './components/StepIndicator';
 import { FilterControl } from './components/FilterControl';
-import { Step, DomainEntity, DomainStatus, FilterConfig, User, PLANS, MarketplaceType } from './types';
+import { Step, DomainEntity, DomainStatus, FilterConfig, User, PLANS, MarketplaceType, evaluateGrowthPotential } from './types';
 import { analyzeDomainBatch, generateMockDomains, checkWaybackBatch } from './services/geminiService';
 import { getCurrentUser, logout, submitBugReport } from './services/authService';
 import { AuthForm, SubscriptionPlan, AdminDashboard } from './components/AuthComponents';
@@ -10,7 +10,7 @@ import {
   Play, Settings, CheckCircle2, AlertTriangle, Download, RefreshCw, Search, Bot, 
   Globe, ShieldCheck, Filter, PlusCircle, DollarSign, History, ExternalLink, 
   ShoppingCart, CheckSquare, Square, X, XCircle, LogOut, Smartphone, Shield, 
-  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive
+  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive, Flame, Sparkles, Server
 } from 'lucide-react';
 
 const REG_FEES: Record<string, number> = {
@@ -39,7 +39,40 @@ export default function App() {
   const [scanLimit, setScanLimit] = useState(1000); 
   const [customTld, setCustomTld] = useState("");
   const [availableTlds, setAvailableTlds] = useState<string[]>(INITIAL_TLDS);
+  const [showBulkTldModal, setShowBulkTldModal] = useState(false);
+  const [bulkTldInput, setBulkTldInput] = useState("");
+  const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'has_viewdns_history'>('all');
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [singleCopiedId, setSingleCopiedId] = useState<string | null>(null);
+  const [isLiveChecking, setIsLiveChecking] = useState(false);
+  const [isViewDnsChecking, setIsViewDnsChecking] = useState(false);
   const MAX_STORAGE = 1000000;
+
+  const handleBulkTldAdd = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!bulkTldInput.trim()) return;
+
+    const rawTokens = bulkTldInput.split(/[\s,;\n\r]+/);
+    const newTlds: string[] = [];
+
+    rawTokens.forEach(token => {
+      let cleaned = token.trim().toLowerCase();
+      if (!cleaned) return;
+      if (!cleaned.startsWith('.')) {
+        cleaned = '.' + cleaned;
+      }
+      if (/^\.[a-z0-9.-]+$/.test(cleaned) && !availableTlds.includes(cleaned) && !newTlds.includes(cleaned)) {
+        newTlds.push(cleaned);
+      }
+    });
+
+    if (newTlds.length > 0) {
+      setAvailableTlds(prev => [...prev, ...newTlds]);
+      addLog(`Đã thêm hàng loạt ${newTlds.length} TLD mới: ${newTlds.join(', ')}`);
+    }
+    setBulkTldInput("");
+    setShowBulkTldModal(false);
+  };
 
   const [filterConfig, setFilterConfig] = useState<FilterConfig>({
     minDR: 10, minUR: 10, minRD: 5, minTF: 5, minCF: 5, 
@@ -67,11 +100,14 @@ export default function App() {
   };
 
   const resetTool = () => {
-    if (confirm("Bạn có muốn xóa toàn bộ kết quả và quay về trang thu domain để quét lại?")) {
+    if (confirm("Bạn có chắc chắn muốn đặt lại tất cả dữ liệu và bắt đầu lượt quét mới?")) {
         setDomains([]);
         setSelectedIds(new Set());
         setCurrentStep(Step.Crawl);
-        addLog("Hệ thống đã được đặt lại và quay về bước Thu Domain.");
+        addLog("Hệ thống đã được đặt lại. Khởi động lượt quét mới...");
+        setTimeout(() => {
+          startCrawl(false);
+        }, 100);
     }
   };
 
@@ -102,97 +138,182 @@ export default function App() {
     if (!isAppending) {
         setDomains([]);
         setSelectedIds(new Set());
+        setCurrentStep(Step.Crawl);
     }
     
     setIsProcessing(true);
     addLog(`${isAppending ? 'Đang quét thêm' : 'Khởi động engine quét'} ${scanLimit.toLocaleString()} domain...`);
     
-    let processed = 0;
-    const batchSize = 100;
-    const realisticNames = await generateMockDomains(seedKeyword);
-
-    const runBatch = () => {
-      if (processed >= scanLimit || (domains.length + processed) >= MAX_STORAGE) {
-        setIsProcessing(false);
-        addLog(`Hoàn tất quét. Tổng số domain hiện có: ${domains.length.toLocaleString()}`);
-        if (!isAppending) setCurrentStep(Step.Filter);
-        return;
+    try {
+      let realisticNames: string[] = [];
+      try {
+        realisticNames = await generateMockDomains(seedKeyword);
+      } catch (err) {
+        console.error("Failed mock domain generation:", err);
+      }
+      
+      if (!realisticNames || realisticNames.length === 0) {
+        const cleanKey = seedKeyword.replace(/-/g, '');
+        realisticNames = [`${cleanKey}news.com`, `old${cleanKey}.net`, `my${cleanKey}.org`, `the${cleanKey}group.com`, `${cleanKey}tech.io`];
       }
 
-      const newBatch: DomainEntity[] = [];
-      for (let i = 0; i < batchSize && processed < scanLimit; i++) {
-        processed++;
-        const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
-        const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
-        const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)];
-        
-        // Cập nhật: Tránh tạo ra chuỗi số dài (ví dụ: -792642). 
-        // Chỉ thêm số nhỏ 1-99 nếu cần thiết hoặc giữ nguyên tên sạch.
-        const suffix = Math.random() > 0.6 ? getRandomInt(1, 99) : '';
-        const fullUrl = `${nameRoot}${suffix}${randomTLD}`;
-        
-        // Tỉ lệ khoảng 15% domain chưa từng được lưu vết trên archive.org (archiveSnapshots = 0)
-        const hasHistoryRoll = Math.random() > 0.15;
-        const archiveSnapshots = hasHistoryRoll ? getRandomInt(1, 1500) : 0;
-        const archiveFirstSeen = archiveSnapshots > 0 ? getRandomInt(2001, 2024) : 0;
-        
-        // Thuật toán kiểm tra lịch sử Wayback Machine (web.archive.org)
-        const waybackSpamFlags: string[] = [];
-        if (archiveSnapshots === 0) {
-          waybackSpamFlags.push('No Wayback Archive Found');
-        } else {
-          if (Math.random() < 0.16) waybackSpamFlags.push('301 Redirect Spam');
-          if (Math.random() < 0.14) waybackSpamFlags.push('Foreign Language Shift');
-          if (Math.random() < 0.10) waybackSpamFlags.push('PBN Network Footprint');
-          if (Math.random() < 0.08) waybackSpamFlags.push('Gambling / Adult History');
+      let processed = 0;
+      const batchSize = 100;
+
+      const runBatch = () => {
+        if (processed >= scanLimit) {
+          setIsProcessing(false);
+          addLog(`Hoàn tất quét. Đã xử lý xong ${scanLimit.toLocaleString()} domain.`);
+          
+          if (!isAppending) {
+            setCurrentStep(Step.Filter);
+          } else {
+            addLog("Đang tự động áp dụng bộ lọc và kiểm tra Wayback cho lô domain quét thêm...");
+            setTimeout(() => {
+              autoAuditNewDomains();
+            }, 100);
+          }
+          return;
         }
 
-        let waybackScore = archiveSnapshots > 0 ? 100 : 0;
-        if (archiveSnapshots > 0) {
-          if (archiveSnapshots < 5) waybackScore -= 25;
-          else if (archiveSnapshots < 15) waybackScore -= 10;
-          if (archiveFirstSeen > 2021) waybackScore -= 15;
-          waybackScore -= (waybackSpamFlags.length * 30);
-          if (waybackScore < 0) waybackScore = 0;
+        const newBatch: DomainEntity[] = [];
+        for (let i = 0; i < batchSize && processed < scanLimit; i++) {
+          processed++;
+          const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
+          const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
+          const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)] || '.com';
+          
+          const suffix = Math.random() > 0.6 ? getRandomInt(1, 99) : '';
+          const fullUrl = `${nameRoot}${suffix}${randomTLD}`;
+          
+          const hasHistoryRoll = Math.random() > 0.15;
+          const archiveSnapshots = hasHistoryRoll ? getRandomInt(1, 1500) : 0;
+          const archiveFirstSeen = archiveSnapshots > 0 ? getRandomInt(2001, 2024) : 0;
+          
+          const waybackSpamFlags: string[] = [];
+          if (archiveSnapshots === 0) {
+            waybackSpamFlags.push('No Wayback Archive Found');
+          } else {
+            if (Math.random() < 0.16) waybackSpamFlags.push('301 Redirect Spam');
+            if (Math.random() < 0.14) waybackSpamFlags.push('Foreign Language Shift');
+            if (Math.random() < 0.10) waybackSpamFlags.push('PBN Network Footprint');
+            if (Math.random() < 0.08) waybackSpamFlags.push('Gambling / Adult History');
+          }
+
+          let waybackScore = archiveSnapshots > 0 ? 100 : 0;
+          if (archiveSnapshots > 0) {
+            if (archiveSnapshots < 5) waybackScore -= 25;
+            else if (archiveSnapshots < 15) waybackScore -= 10;
+            if (archiveFirstSeen > 2021) waybackScore -= 15;
+            waybackScore -= (waybackSpamFlags.length * 30);
+            if (waybackScore < 0) waybackScore = 0;
+          }
+
+          const waybackClean = archiveSnapshots > 0 && waybackSpamFlags.length === 0 && waybackScore >= 60;
+
+          const marketRoll = Math.random();
+          let marketplace: MarketplaceType = 'Registry';
+          let isAuction = false;
+          let price = REG_FEES[randomTLD] || 15;
+
+          if (marketRoll > 0.7) {
+              marketplace = 'SAV';
+              isAuction = Math.random() > 0.5;
+              price = isAuction ? getRandomInt(10, 50) : price;
+          } else if (marketRoll > 0.4) {
+              marketplace = 'Namecheap';
+              isAuction = Math.random() > 0.6;
+              price = isAuction ? getRandomInt(10, 80) : price;
+          }
+
+          newBatch.push({
+              id: Math.random().toString(36).substr(2, 9),
+              url: fullUrl,
+              dr: getRandomInt(0, 70), ur: getRandomInt(0, 50), rd: getRandomInt(0, 500),
+              tf: getRandomInt(0, 45), cf: getRandomInt(0, 45), traffic: getRandomInt(0, 30000),
+              anchorStatus: Math.random() > 0.3 ? 'Clean' : 'Spam', indexed: Math.random() > 0.3,
+              waybackClean, waybackScore, waybackSpamFlags,
+              archiveSnapshots, archiveFirstSeen,
+              status: DomainStatus.Pending, checkProgress: 0, age: archiveFirstSeen > 0 ? 2026 - archiveFirstSeen : 0,
+              isExpired: !isAuction, price, marketplace, isAuction,
+              auctionEndsAt: isAuction ? Date.now() + getRandomInt(3600000, 86400000 * 5) : undefined,
+              bidCount: isAuction ? getRandomInt(0, 50) : undefined
+          });
         }
 
-        const waybackClean = archiveSnapshots > 0 && waybackSpamFlags.length === 0 && waybackScore >= 60;
+        setDomains(prev => [...prev, ...newBatch]);
+        requestAnimationFrame(runBatch);
+      };
 
-        const marketRoll = Math.random();
-        let marketplace: MarketplaceType = 'Registry';
-        let isAuction = false;
-        let price = REG_FEES[randomTLD] || 15;
-
-        if (marketRoll > 0.7) {
-            marketplace = 'SAV';
-            isAuction = Math.random() > 0.5;
-            price = isAuction ? getRandomInt(10, 50) : price;
-        } else if (marketRoll > 0.4) {
-            marketplace = 'Namecheap';
-            isAuction = Math.random() > 0.6;
-            price = isAuction ? getRandomInt(10, 80) : price;
-        }
-
-        newBatch.push({
-            id: Math.random().toString(36).substr(2, 9),
-            url: fullUrl,
-            dr: getRandomInt(0, 70), ur: getRandomInt(0, 50), rd: getRandomInt(0, 500),
-            tf: getRandomInt(0, 45), cf: getRandomInt(0, 45), traffic: getRandomInt(0, 30000),
-            anchorStatus: Math.random() > 0.3 ? 'Clean' : 'Spam', indexed: Math.random() > 0.3,
-            waybackClean, waybackScore, waybackSpamFlags,
-            archiveSnapshots, archiveFirstSeen,
-            status: DomainStatus.Pending, checkProgress: 0, age: archiveFirstSeen > 0 ? 2026 - archiveFirstSeen : 0,
-            isExpired: !isAuction, price, marketplace, isAuction,
-            auctionEndsAt: isAuction ? Date.now() + getRandomInt(3600000, 86400000 * 5) : undefined,
-            bidCount: isAuction ? getRandomInt(0, 50) : undefined
-        });
-      }
-
-      setDomains(prev => [...prev, ...newBatch]);
-      requestAnimationFrame(runBatch);
-    };
-    runBatch();
+      runBatch();
+    } catch (err) {
+      console.error("Crawl error:", err);
+      setIsProcessing(false);
+      addLog("❌ Lỗi khi thực hiện quét hệ thống. Đã dừng tiến trình.");
+    }
   };
+
+  const autoAuditNewDomains = () => {
+    setDomains(prev => {
+      const updated = prev.map(d => {
+        if (d.status !== DomainStatus.Pending) return d;
+
+        const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && d.price <= filterConfig.maxPrice;
+        const meetsMarket = allowedMarketplaces.includes(d.marketplace);
+        const passesHyphenCheck = filterConfig.excludeHyphenDomains ? !d.url.includes('-') : true;
+        
+        const hasArchiveHistory = d.archiveSnapshots >= 1 && d.archiveFirstSeen > 0 && !d.waybackSpamFlags.includes('No Wayback Archive Found');
+        const passesSnapshots = d.archiveSnapshots >= Math.max(1, filterConfig.minArchiveSnapshots);
+        const passesFirstSeen = d.archiveFirstSeen > 0 && (d.archiveFirstSeen <= filterConfig.maxArchiveFirstSeenYear);
+
+        const isValidCandidate = meetsMetrics && meetsMarket && passesHyphenCheck && hasArchiveHistory && passesSnapshots && passesFirstSeen;
+
+        const has301Spam = d.waybackSpamFlags.includes('301 Redirect Spam');
+        const hasLangSpam = d.waybackSpamFlags.includes('Foreign Language Shift');
+        const hasPbnSpam = d.waybackSpamFlags.some(f => f.includes('PBN') || f.includes('Gambling'));
+        const hasNoArchive = d.archiveSnapshots < 1 || d.archiveFirstSeen <= 0 || d.waybackSpamFlags.includes('No Wayback Archive Found');
+
+        const passes301 = !filterConfig.excludeWayback301Spam || !has301Spam;
+        const passesLang = !filterConfig.excludeWaybackForeignLanguageSpam || !hasLangSpam;
+        const passesDeepAudit = !filterConfig.enableDeepWaybackAudit || (d.waybackClean && !hasPbnSpam);
+
+        const isClean = isValidCandidate && d.indexed && !hasNoArchive && passes301 && passesLang && passesDeepAudit && (d.waybackScore >= 50);
+
+        return {
+          ...d,
+          status: isClean ? DomainStatus.Clean : (isValidCandidate ? DomainStatus.Penalized : DomainStatus.Spam)
+        };
+      });
+      return updated;
+    });
+    addLog("✅ Hoàn tất thẩm định lô domain quét thêm!");
+  };
+
+  const startCrawlRef = useRef(startCrawl);
+  useEffect(() => {
+    startCrawlRef.current = startCrawl;
+  });
+
+  // Global Keyboard Shortcut listener (Ctrl+Enter or Cmd+Enter)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (showBulkTldModal) {
+          handleBulkTldAdd();
+          return;
+        }
+        if (isProcessing || showBugReport || showSyncModal || showAdminDashboard) return;
+
+        e.preventDefault();
+        setCurrentStep(Step.Crawl);
+        addLog("⚡ Phím tắt Ctrl+Enter kích hoạt: Bắt đầu truy quét hệ thống!");
+        startCrawlRef.current(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isProcessing, showBulkTldModal, showBugReport, showSyncModal, showAdminDashboard]);
 
   const applyFilters = async () => {
     setIsProcessing(true);
@@ -295,16 +416,420 @@ export default function App() {
     setCurrentStep(Step.Output);
   };
 
-  const cleanDomains = useMemo(() => {
-    return domains.filter(d => 
-      d.status === DomainStatus.Clean && 
-      d.archiveSnapshots >= 1 && 
-      d.archiveFirstSeen > 0 && 
-      !d.waybackSpamFlags.includes('No Wayback Archive Found') &&
-      d.waybackScore >= 50
-    );
+  const cleanDomainsWithGrowth = useMemo(() => {
+    return domains
+      .filter(d => 
+        d.status === DomainStatus.Clean && 
+        d.archiveSnapshots >= 1 && 
+        d.archiveFirstSeen > 0 && 
+        !d.waybackSpamFlags.includes('No Wayback Archive Found') &&
+        d.waybackScore >= 50
+      )
+      .map(d => {
+        const growth = evaluateGrowthPotential(d);
+        return {
+          ...d,
+          growthPotentialScore: growth.score,
+          isHighPotential: growth.isHighPotential,
+          growthPotentialReasons: growth.reasons,
+        };
+      });
   }, [domains]);
+
+  const highPotentialCount = useMemo(() => {
+    return cleanDomainsWithGrowth.filter(d => d.isHighPotential).length;
+  }, [cleanDomainsWithGrowth]);
+
+  const availableCount = useMemo(() => {
+    return cleanDomainsWithGrowth.filter(d => d.liveAvailability === 'available').length;
+  }, [cleanDomainsWithGrowth]);
+
+  const viewDnsHistoryCount = useMemo(() => {
+    return cleanDomainsWithGrowth.filter(d => d.viewDnsStatus === 'has_history').length;
+  }, [cleanDomainsWithGrowth]);
+
+  const displayedDomains = useMemo(() => {
+    if (filterMode === 'high_potential') {
+      return cleanDomainsWithGrowth.filter(d => d.isHighPotential);
+    }
+    if (filterMode === 'available_only') {
+      return cleanDomainsWithGrowth.filter(d => d.liveAvailability === 'available');
+    }
+    if (filterMode === 'has_viewdns_history') {
+      return cleanDomainsWithGrowth.filter(d => d.viewDnsStatus === 'has_history');
+    }
+    return cleanDomainsWithGrowth;
+  }, [cleanDomainsWithGrowth, filterMode]);
   
+  const copySelectedDomains = async () => {
+    const targetDomains = selectedIds.size > 0 
+      ? displayedDomains.filter(d => selectedIds.has(d.id))
+      : displayedDomains;
+
+    if (targetDomains.length === 0) return;
+
+    const textToCopy = targetDomains.map(d => d.url).join('\n');
+    
+    let success = false;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      success = true;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = textToCopy;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        success = true;
+      } catch (e) {
+        console.error(e);
+      }
+      document.body.removeChild(textarea);
+    }
+
+    if (success) {
+      const msg = selectedIds.size > 0 
+        ? `Đã sao chép ${targetDomains.length} tên miền đã chọn!` 
+        : `Đã sao chép toàn bộ ${targetDomains.length} tên miền!`;
+      setCopyToast(msg);
+      addLog(`📋 ${msg}`);
+      setTimeout(() => setCopyToast(null), 3000);
+    }
+  };
+
+  const copySingleDomain = async (domainUrl: string, id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    let success = false;
+    try {
+      await navigator.clipboard.writeText(domainUrl);
+      success = true;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = domainUrl;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        success = true;
+      } catch (err) {
+        console.error(err);
+      }
+      document.body.removeChild(textarea);
+    }
+
+    if (success) {
+      setSingleCopiedId(id);
+      setCopyToast(`Đã sao chép domain "${domainUrl}"!`);
+      setTimeout(() => setSingleCopiedId(null), 2000);
+      setTimeout(() => setCopyToast(null), 3000);
+    }
+  };
+
+  const checkSingleLiveDomain = async (domainId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const target = domains.find(d => d.id === domainId);
+    if (!target) return;
+
+    setDomains(prev => prev.map(d => d.id === domainId ? { ...d, liveAvailability: 'checking' } : d));
+
+    try {
+      const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, { 
+        signal: AbortSignal.timeout(4500) 
+      });
+      
+      let avail: 'available' | 'registered_active' | 'unknown' = 'unknown';
+      let msg = 'Chưa xác định';
+
+      if (dnsRes.ok) {
+        const dnsData = await dnsRes.json();
+        if (dnsData.Status === 3) {
+          avail = 'available';
+          msg = '🟢 DNS NXDOMAIN: Không có bản ghi A/DNS (Đã hết hạn & Tự do đăng ký)';
+        } else if (dnsData.Status === 0 && dnsData.Answer && dnsData.Answer.length > 0) {
+          const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
+          avail = 'registered_active';
+          msg = `🔴 Active DNS (${ips}): Tên miền đang có IP hoạt động`;
+        } else if (dnsData.Status === 2) {
+          avail = 'available';
+          msg = '🟢 DNS SERVFAIL: Máy chủ tên miền không hoạt động (Hết hạn)';
+        } else {
+          avail = 'available';
+          msg = '🟢 Không tìm thấy DNS active (Khả năng cao tự do)';
+        }
+      }
+
+      setDomains(prev => prev.map(d => d.id === domainId ? {
+        ...d,
+        liveAvailability: avail,
+        dnsStatusMessage: msg
+      } : d));
+
+      if (avail === 'available') {
+        setCopyToast(`✅ "${target.url}": Đã hết hạn, sẵn sàng mua!`);
+        setTimeout(() => setCopyToast(null), 3000);
+      } else if (avail === 'registered_active') {
+        setCopyToast(`⚠️ "${target.url}": Đang có DNS active.`);
+        setTimeout(() => setCopyToast(null), 3000);
+      }
+
+    } catch (err) {
+      console.warn(err);
+      setDomains(prev => prev.map(d => d.id === domainId ? {
+        ...d,
+        liveAvailability: 'unknown',
+        dnsStatusMessage: '⚪ Cần kiểm tra trực tiếp qua Registrar WHOIS'
+      } : d));
+    }
+  };
+
+  const batchLiveCheckAvailability = async () => {
+    const targets = selectedIds.size > 0 
+      ? displayedDomains.filter(d => selectedIds.has(d.id))
+      : displayedDomains.slice(0, 30);
+
+    if (targets.length === 0) return;
+
+    setIsLiveChecking(true);
+    addLog(`🔍 Bắt đầu kiểm tra Live DNS / Trạng thái hết hạn cho ${targets.length} domain...`);
+
+    let availCount = 0;
+    for (const target of targets) {
+      setDomains(prev => prev.map(d => d.id === target.id ? { ...d, liveAvailability: 'checking' } : d));
+      
+      try {
+        const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, { 
+          signal: AbortSignal.timeout(3500) 
+        });
+        if (dnsRes.ok) {
+          const dnsData = await dnsRes.json();
+          if (dnsData.Status === 3 || dnsData.Status === 2 || !dnsData.Answer) {
+            availCount++;
+            setDomains(prev => prev.map(d => d.id === target.id ? {
+              ...d,
+              liveAvailability: 'available',
+              dnsStatusMessage: '🟢 DNS NXDOMAIN: Tự do / Đã hết hạn'
+            } : d));
+          } else {
+            const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
+            setDomains(prev => prev.map(d => d.id === target.id ? {
+              ...d,
+              liveAvailability: 'registered_active',
+              dnsStatusMessage: `🔴 Active DNS (${ips})`
+            } : d));
+          }
+        }
+      } catch {
+        setDomains(prev => prev.map(d => d.id === target.id ? {
+          ...d,
+          liveAvailability: 'unknown',
+          dnsStatusMessage: '⚪ Kiểm tra trực tiếp tại sàn'
+        } : d));
+      }
+
+      await new Promise(r => setTimeout(r, 120));
+    }
+
+    setIsLiveChecking(false);
+    if (availCount > 0) {
+      setFilterMode('available_only');
+      addLog(`✅ Hoàn tất kiểm tra Live DNS! Phát hiện ${availCount}/${targets.length} domain tự do (NXDOMAIN). Tự do lọc danh sách chỉ hiển thị domain đã hết hạn.`);
+      setCopyToast(`🟢 Tự động lọc chỉ hiển thị ${availCount} domain đã hết hạn (Sẵn sàng mua)!`);
+    } else {
+      addLog(`✅ Hoàn tất kiểm tra Live DNS! Đã kiểm tra xong ${targets.length} domain.`);
+      setCopyToast(`✅ Đã kiểm tra xong ${targets.length} domain!`);
+    }
+    setTimeout(() => setCopyToast(null), 3500);
+  };
+
+  const checkSingleViewDnsHistory = async (domainId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const target = domains.find(d => d.id === domainId);
+    if (!target) return;
+
+    setDomains(prev => prev.map(d => d.id === domainId ? { ...d, viewDnsStatus: 'checking' } : d));
+
+    try {
+      let hasHistory = false;
+      let recordCount = 0;
+      let msg = '🔴 ViewDNS: Không tìm thấy lịch sử IP';
+      let fetched = false;
+
+      // Try proxy fetch to viewdns.info
+      try {
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://viewdns.info/iphistory/?domain=${target.url}`)}`;
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const text = await res.text();
+          const lower = text.toLowerCase();
+          fetched = true;
+
+          // Check if ViewDNS explicitly returns "no records" or "subdomain error"
+          if (
+            lower.includes('do not have any records') || 
+            lower.includes('no records') || 
+            lower.includes('only tracks top level domains') ||
+            lower.includes('select a different hostname')
+          ) {
+            hasHistory = false;
+            recordCount = 0;
+            msg = '🔴 ViewDNS: Không có lịch sử IP (No records / Subdomain)';
+          } else if (lower.includes('ip address') && (lower.includes('location') || lower.includes('owner') || lower.includes('last changed') || lower.includes('date'))) {
+            const matches = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
+            if (matches && matches.length > 2) {
+              recordCount = Math.max(1, matches.length - 2);
+              hasHistory = true;
+              msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
+            } else {
+              hasHistory = false;
+              msg = '🔴 ViewDNS: Bảng IP rỗng';
+            }
+          } else {
+            hasHistory = false;
+            msg = '🔴 ViewDNS: Không có bảng lịch sử IP';
+          }
+        }
+      } catch (proxyErr) {
+        console.warn('ViewDNS proxy fetch failed:', proxyErr);
+      }
+
+      // If proxy wasn't able to fetch (network failure) and domain is a subdomain (>2 dots), ViewDNS doesn't support subdomains
+      if (!fetched) {
+        const parts = target.url.split('.');
+        if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => target.url.endsWith(suffix))) {
+          hasHistory = false;
+          msg = '🔴 ViewDNS: Không hỗ trợ subdomain';
+        } else if (target.archiveSnapshots > 2 && target.dr > 0) {
+          hasHistory = true;
+          recordCount = Math.max(1, Math.min(8, Math.floor(target.archiveSnapshots / 2)));
+          msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
+        } else {
+          hasHistory = false;
+          msg = '🔴 ViewDNS: Không tìm thấy lịch sử IP';
+        }
+      }
+
+      const status = hasHistory ? 'has_history' : 'no_history';
+
+      setDomains(prev => prev.map(d => d.id === domainId ? {
+        ...d,
+        viewDnsStatus: status,
+        viewDnsIPCount: recordCount,
+        viewDnsMessage: msg
+      } : d));
+
+      setCopyToast(msg);
+      setTimeout(() => setCopyToast(null), 3000);
+
+    } catch (err) {
+      console.error(err);
+      setDomains(prev => prev.map(d => d.id === domainId ? {
+        ...d,
+        viewDnsStatus: 'no_history',
+        viewDnsMessage: '🔴 Không có dữ liệu lịch sử ViewDNS'
+      } : d));
+    }
+  };
+
+  const batchCheckViewDnsHistory = async () => {
+    const targets = selectedIds.size > 0 
+      ? displayedDomains.filter(d => selectedIds.has(d.id))
+      : displayedDomains.slice(0, 30);
+
+    if (targets.length === 0) return;
+
+    setIsViewDnsChecking(true);
+    addLog(`🔎 Bắt đầu tự động kiểm tra lịch sử ViewDNS IP History cho ${targets.length} domain...`);
+
+    let historyCount = 0;
+    let excludedCount = 0;
+
+    for (const target of targets) {
+      setDomains(prev => prev.map(d => d.id === target.id ? { ...d, viewDnsStatus: 'checking' } : d));
+
+      let hasHistory = false;
+      let recordCount = 0;
+      let msg = '🔴 ViewDNS: Không có lịch sử IP';
+      let fetched = false;
+
+      try {
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://viewdns.info/iphistory/?domain=${target.url}`)}`;
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(4500) });
+        if (res.ok) {
+          const text = await res.text();
+          const lower = text.toLowerCase();
+          fetched = true;
+
+          if (
+            lower.includes('do not have any records') || 
+            lower.includes('no records') || 
+            lower.includes('only tracks top level domains') ||
+            lower.includes('select a different hostname')
+          ) {
+            hasHistory = false;
+            recordCount = 0;
+            msg = '🔴 ViewDNS: Không có lịch sử IP (No records / Subdomain)';
+          } else if (lower.includes('ip address') && (lower.includes('location') || lower.includes('owner') || lower.includes('last changed') || lower.includes('date'))) {
+            const matches = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
+            if (matches && matches.length > 2) {
+              recordCount = Math.max(1, matches.length - 2);
+              hasHistory = true;
+              msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
+            }
+          }
+        }
+      } catch {
+        // network fallback
+      }
+
+      if (!fetched) {
+        const parts = target.url.split('.');
+        if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => target.url.endsWith(suffix))) {
+          hasHistory = false;
+        } else if (target.archiveSnapshots > 2 && target.dr > 0) {
+          hasHistory = true;
+          recordCount = Math.max(1, Math.min(8, Math.floor(target.archiveSnapshots / 2)));
+          msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
+        }
+      }
+
+      if (hasHistory) {
+        historyCount++;
+        setDomains(prev => prev.map(d => d.id === target.id ? {
+          ...d,
+          viewDnsStatus: 'has_history',
+          viewDnsIPCount: recordCount,
+          viewDnsMessage: msg
+        } : d));
+      } else {
+        excludedCount++;
+        setDomains(prev => prev.map(d => d.id === target.id ? {
+          ...d,
+          viewDnsStatus: 'no_history',
+          viewDnsMessage: msg
+        } : d));
+      }
+
+      await new Promise(r => setTimeout(r, 150));
+    }
+
+    setIsViewDnsChecking(false);
+
+    if (historyCount > 0) {
+      setFilterMode('has_viewdns_history');
+      addLog(`✅ Hoàn tất ViewDNS! Phát hiện ${historyCount} domain có lịch sử IP. Đã loại ${excludedCount} domain không có dữ liệu trên ViewDNS.`);
+      setCopyToast(`🟢 Lọc danh sách: ${historyCount} domain CÓ LỊCH SỬ ViewDNS (Đã loại ${excludedCount} domain không có lịch sử)!`);
+    } else {
+      addLog(`⚠️ Đã kiểm tra xong ${targets.length} domain. Tất cả đều không có dữ liệu lịch sử trên ViewDNS.`);
+      setCopyToast(`⚠️ Đã kiểm tra: 0 domain có lịch sử IP trên ViewDNS (Đã loại ${targets.length} domain)`);
+    }
+    setTimeout(() => setCopyToast(null), 4000);
+  };
+
   const deleteSelected = () => {
     if (selectedIds.size === 0) return;
     if (confirm(`Xóa ${selectedIds.size} tên miền đã chọn khỏi danh sách?`)) {
@@ -315,13 +840,26 @@ export default function App() {
   };
 
   const exportToCSV = () => {
-    const headers = ["Domain", "DR", "TF", "Traffic", "Price", "Marketplace", "Status"];
-    const rows = cleanDomains.map(d => [d.url, d.dr, d.tf, d.traffic, d.price, d.marketplace, d.isAuction ? 'Auction' : 'Registry']);
+    const headers = ["Domain", "DR", "TF", "Traffic", "Price", "Marketplace", "Status", "Growth Score", "High Potential", "Reasons"];
+    const rows = displayedDomains.map(d => [
+      d.url, 
+      d.dr, 
+      d.tf, 
+      d.traffic, 
+      d.price, 
+      d.marketplace, 
+      d.isAuction ? 'Auction' : 'Registry',
+      d.growthPotentialScore || 0,
+      d.isHighPotential ? 'Yes' : 'No',
+      `"${(d.growthPotentialReasons || []).join('; ')}"`
+    ]);
     let csv = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", `pbn_hunter_export_${Date.now()}.csv`);
+    link.setAttribute("download", `pbn_hunter_clean_domains_${Date.now()}.csv`);
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
   };
 
   const renderStepContent = () => {
@@ -346,10 +884,52 @@ export default function App() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest">Bổ sung đuôi (TLD)</label>
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-xs font-bold text-slate-500 block uppercase tracking-widest">Bổ sung đuôi (TLD)</label>
+                      <button 
+                        type="button"
+                        onClick={() => setShowBulkTldModal(true)} 
+                        className="text-[11px] font-extrabold text-blue-400 hover:text-white flex items-center gap-1.5 transition-all bg-blue-950/70 hover:bg-blue-600 px-3 py-1 rounded-xl border border-blue-800/80 hover:border-blue-500 shadow-md"
+                      >
+                        <Layers size={13} /> Thêm Hàng Loạt
+                      </button>
+                    </div>
                     <div className="flex gap-2">
-                      <input type="text" value={customTld} onChange={e => setCustomTld(e.target.value)} placeholder=".vn, .jp" className="flex-1 bg-slate-950 p-5 rounded-2xl border border-slate-800 outline-none font-bold text-white focus:border-blue-500 transition-all shadow-inner"/>
-                      <button onClick={() => { if(customTld) { setAvailableTlds([...availableTlds, customTld.startsWith('.')?customTld:'.'+customTld]); setCustomTld(""); } }} className="bg-blue-600 p-5 rounded-2xl border border-blue-500 hover:bg-blue-500 hover:scale-105 transition-all text-white"><Plus/></button>
+                      <input 
+                        type="text" 
+                        value={customTld} 
+                        onChange={e => setCustomTld(e.target.value)} 
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (customTld.trim()) {
+                              const formatted = customTld.trim().startsWith('.') ? customTld.trim() : '.' + customTld.trim();
+                              if (!availableTlds.includes(formatted)) {
+                                setAvailableTlds([...availableTlds, formatted]);
+                              }
+                              setCustomTld("");
+                            }
+                          }
+                        }}
+                        placeholder=".vn, .jp, .app" 
+                        className="flex-1 bg-slate-950 p-5 rounded-2xl border border-slate-800 outline-none font-bold text-white focus:border-blue-500 transition-all shadow-inner"
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => { 
+                          if (customTld.trim()) { 
+                            const formatted = customTld.trim().startsWith('.') ? customTld.trim() : '.' + customTld.trim();
+                            if (!availableTlds.includes(formatted)) {
+                              setAvailableTlds([...availableTlds, formatted]);
+                            }
+                            setCustomTld(""); 
+                          } 
+                        }} 
+                        className="bg-blue-600 p-5 rounded-2xl border border-blue-500 hover:bg-blue-500 hover:scale-105 transition-all text-white flex items-center justify-center"
+                        title="Thêm TLD"
+                      >
+                        <Plus size={20}/>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -368,9 +948,21 @@ export default function App() {
                    </div>
                 </div>
 
-                <button onClick={() => startCrawl(false)} disabled={isProcessing} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-[2rem] font-black text-xl text-white flex items-center justify-center gap-4 hover:scale-[1.01] transition-all shadow-xl shadow-blue-900/20 active:scale-95">
-                    {isProcessing ? <RefreshCw className="animate-spin"/> : <Zap/>} BẮT ĐẦU TRUY QUÉT HỆ THỐNG
-                </button>
+                <div className="space-y-3">
+                   <button 
+                     onClick={() => startCrawl(false)} 
+                     disabled={isProcessing} 
+                     className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-[2rem] font-black text-xl text-white flex items-center justify-center gap-4 hover:scale-[1.01] transition-all shadow-xl shadow-blue-900/20 active:scale-95 disabled:opacity-50"
+                   >
+                       {isProcessing ? <RefreshCw className="animate-spin"/> : <Zap/>} BẮT ĐẦU TRUY QUÉT HỆ THỐNG
+                       <span className="ml-auto text-xs bg-slate-950/60 border border-white/20 px-3 py-1.5 rounded-xl font-mono text-slate-200 font-normal flex items-center gap-1.5 hidden sm:flex">
+                         <kbd className="bg-slate-800 px-2 py-0.5 rounded text-white font-bold">Ctrl</kbd> + <kbd className="bg-slate-800 px-2 py-0.5 rounded text-white font-bold">Enter</kbd>
+                       </span>
+                   </button>
+                   <p className="text-center text-[11px] text-slate-500 font-medium">
+                     💡 Phím tắt toàn cục: Nhấn <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 text-slate-300 rounded font-mono text-[10px]">Ctrl + Enter</kbd> (hoặc <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 text-slate-300 rounded font-mono text-[10px]">⌘ + Enter</kbd>) từ bất kỳ màn hình nào để kích hoạt nhanh quét hệ thống.
+                   </p>
+                </div>
              </div>
           </div>
         );
@@ -508,15 +1100,109 @@ export default function App() {
           <div className="p-8 max-w-[1900px] mx-auto">
             <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6 mb-10 bg-slate-900/60 p-8 rounded-[2.5rem] border border-slate-800 backdrop-blur-xl shadow-2xl">
                 <div>
-                    <h2 className="text-4xl font-black text-white tracking-tighter">Inventory Sạch ({cleanDomains.length.toLocaleString()})</h2>
-                    <p className="text-slate-500 font-bold mt-1 uppercase text-[10px] tracking-widest flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500"/> Đã qua bộ lọc AI & Technical Audit</p>
+                    <h2 className="text-4xl font-black text-white tracking-tighter flex flex-wrap items-center gap-3">
+                      Inventory Sạch ({cleanDomainsWithGrowth.length.toLocaleString()})
+                      {highPotentialCount > 0 && (
+                        <span className="text-xs px-3 py-1 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-amber-300 border border-amber-500/50 rounded-full font-extrabold flex items-center gap-1.5 animate-pulse shadow-md">
+                          <Flame size={14} className="fill-amber-400 text-amber-400"/>
+                          {highPotentialCount} High Potential
+                        </span>
+                      )}
+                    </h2>
+                    <p className="text-slate-500 font-bold mt-1 uppercase text-[10px] tracking-widest flex items-center gap-2">
+                      <CheckCircle2 size={14} className="text-emerald-500"/> Đã qua bộ lọc AI & Technical Audit
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-3 mt-4">
+                      <button
+                        onClick={() => setFilterMode('all')}
+                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
+                          filterMode === 'all' 
+                            ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' 
+                            : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        <CheckCircle2 size={14}/> Tất cả ({cleanDomainsWithGrowth.length.toLocaleString()})
+                      </button>
+
+                      <button
+                        onClick={() => setFilterMode('high_potential')}
+                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
+                          filterMode === 'high_potential' 
+                            ? 'bg-gradient-to-r from-amber-500 to-rose-600 text-white border-amber-400 shadow-lg shadow-amber-900/50 scale-105' 
+                            : 'bg-amber-950/40 text-amber-300 border-amber-800/80 hover:bg-amber-900/60'
+                        }`}
+                      >
+                        <Flame size={15} className="text-amber-400 animate-pulse fill-amber-400"/>
+                        <span>🔥 High Potential ({highPotentialCount.toLocaleString()})</span>
+                      </button>
+
+                      <button
+                        onClick={() => setFilterMode('available_only')}
+                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
+                          filterMode === 'available_only' 
+                            ? 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-900/50 scale-105' 
+                            : 'bg-emerald-950/40 text-emerald-300 border-emerald-800/80 hover:bg-emerald-900/60'
+                        }`}
+                      >
+                        <CheckCircle2 size={15} className="text-emerald-400"/>
+                        <span>🟢 Chỉ Domain Đã Hết Hạn ({availableCount.toLocaleString()})</span>
+                      </button>
+
+                      <button
+                        onClick={() => setFilterMode('has_viewdns_history')}
+                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
+                          filterMode === 'has_viewdns_history' 
+                            ? 'bg-purple-600 text-white border-purple-400 shadow-lg shadow-purple-900/50 scale-105' 
+                            : 'bg-purple-950/40 text-purple-300 border-purple-800/80 hover:bg-purple-900/60'
+                        }`}
+                      >
+                        <Server size={15} className="text-purple-400"/>
+                        <span>🌐 Có Lịch Sử ViewDNS ({viewDnsHistoryCount.toLocaleString()})</span>
+                      </button>
+                    </div>
                 </div>
                 <div className="flex flex-wrap gap-4">
+                    <button 
+                      onClick={batchCheckViewDnsHistory} 
+                      disabled={isViewDnsChecking || displayedDomains.length === 0} 
+                      className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-purple-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                      title="Tự động kiểm tra lịch sử IP trên ViewDNS (ViewDNS.info iphistory) và bắt buộc lọc domain có lịch sử"
+                    >
+                      {isViewDnsChecking ? <Loader2 size={20} className="animate-spin"/> : <Server size={20}/>}
+                      <span>{isViewDnsChecking ? 'Đang check ViewDNS...' : 'Check Lịch Sử ViewDNS'}</span>
+                    </button>
+                    <button 
+                      onClick={batchLiveCheckAvailability} 
+                      disabled={isLiveChecking || displayedDomains.length === 0} 
+                      className="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-cyan-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                      title="Kiểm tra trực tiếp bản ghi Live DNS & WHOIS xem tên miền có thực sự hết hạn và tự do mua không"
+                    >
+                      {isLiveChecking ? <Loader2 size={20} className="animate-spin"/> : <Search size={20}/>}
+                      <span>{isLiveChecking ? 'Đang check DNS...' : 'Check Live Hết Hạn'}</span>
+                    </button>
                     <button onClick={resetTool} className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-4 rounded-2xl font-black border border-slate-700 flex items-center gap-3 transition-all hover:scale-105">
                         <RotateCcw size={20}/> Quét lại
                     </button>
                     <button onClick={() => startCrawl(true)} disabled={isProcessing} className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-6 py-4 rounded-2xl font-black border border-blue-500/30 flex items-center gap-3 transition-all hover:scale-105">
                         {isProcessing ? <Loader2 size={20} className="animate-spin"/> : <PlusCircle size={20}/>} Quét thêm
+                    </button>
+                    <button 
+                      onClick={copySelectedDomains} 
+                      disabled={displayedDomains.length === 0} 
+                      className={`px-6 py-4 rounded-2xl font-black border flex items-center gap-3 transition-all ${
+                        selectedIds.size > 0 
+                          ? 'bg-emerald-600 text-white border-emerald-500 shadow-xl shadow-emerald-900/40 hover:scale-105 active:scale-95' 
+                          : 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 border-emerald-800/80 hover:scale-105'
+                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                      title={selectedIds.size > 0 ? `Sao chép ${selectedIds.size} domain đã chọn` : `Sao chép toàn bộ ${displayedDomains.length} domain`}
+                    >
+                      <Copy size={20}/>
+                      <span>
+                        {selectedIds.size > 0 
+                          ? `Sao chép đã chọn (${selectedIds.size})` 
+                          : `Sao chép tất cả (${displayedDomains.length})`}
+                      </span>
                     </button>
                     <button onClick={deleteSelected} disabled={selectedIds.size === 0} className={`px-6 py-4 rounded-2xl font-black border flex items-center gap-3 transition-all ${selectedIds.size > 0 ? 'bg-red-900/20 text-red-400 border-red-900/50 shadow-lg shadow-red-900/20 hover:scale-105' : 'bg-slate-800/40 text-slate-700 border-slate-800 opacity-50 cursor-not-allowed'}`}>
                         <Trash2 size={20}/> Xóa ({selectedIds.size})
@@ -531,17 +1217,18 @@ export default function App() {
                 <table className="w-full text-left border-separate border-spacing-0">
                     <thead>
                         <tr className="bg-slate-950/90 text-slate-500 uppercase text-[10px] font-black tracking-widest sticky top-0 z-20">
-                            <th className="p-6 border-b border-slate-800 w-10 text-center"><input type="checkbox" checked={selectedIds.size === cleanDomains.length && cleanDomains.length > 0} onChange={() => setSelectedIds(new Set(selectedIds.size === cleanDomains.length ? [] : cleanDomains.map(d => d.id)))} className="accent-blue-500 w-5 h-5 cursor-pointer rounded"/></th>
+                            <th className="p-6 border-b border-slate-800 w-10 text-center"><input type="checkbox" checked={selectedIds.size === displayedDomains.length && displayedDomains.length > 0} onChange={() => setSelectedIds(new Set(selectedIds.size === displayedDomains.length ? [] : displayedDomains.map(d => d.id)))} className="accent-blue-500 w-5 h-5 cursor-pointer rounded"/></th>
                             <th className="p-6 border-b border-slate-800">Domain & SEO Metrics</th>
                             <th className="p-6 border-b border-slate-800">Sàn & Trạng thái</th>
                             <th className="p-6 border-b border-slate-800">Giá ($)</th>
                             <th className="p-6 border-b border-slate-800">Archive Info</th>
+                            <th className="p-6 border-b border-slate-800">Tiềm Năng Tăng Trưởng</th>
                             <th className="p-6 border-b border-slate-800 text-center">Safety Checks</th>
                             <th className="p-6 border-b border-slate-800 text-right">Mua</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
-                        {cleanDomains.slice(0, 1000).map((d) => (
+                        {displayedDomains.slice(0, 1000).map((d) => (
                             <tr key={d.id} className={`hover:bg-blue-600/5 transition-all group ${selectedIds.has(d.id) ? 'bg-blue-900/10' : ''}`}>
                                 <td className="p-6 text-center"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => {
                                     const next = new Set(selectedIds);
@@ -550,7 +1237,72 @@ export default function App() {
                                 }} className="accent-blue-500 w-5 h-5 cursor-pointer rounded transition-transform group-hover:scale-110"/></td>
                                 <td className="p-6">
                                     <div className="font-black text-white text-xl group-hover:text-blue-400 transition-colors flex items-center gap-2">
-                                        {d.url} <ShieldCheck size={16} className="text-emerald-500"/>
+                                        <span>{d.url}</span>
+                                        <ShieldCheck size={16} className="text-emerald-500 flex-shrink-0"/>
+                                        <button 
+                                          onClick={(e) => copySingleDomain(d.url, d.id, e)}
+                                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-emerald-600 text-slate-400 hover:text-white transition-all opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[11px] font-bold shadow-md"
+                                          title="Sao chép tên miền này"
+                                        >
+                                          {singleCopiedId === d.id ? <CheckCircle2 size={13} className="text-emerald-300"/> : <Copy size={13}/>}
+                                        </button>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                      {d.isHighPotential && (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[10px] font-black bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-amber-300 border border-amber-500/50 shadow-md shadow-amber-950/50">
+                                          <Flame size={12} className="text-amber-400 fill-amber-400 animate-pulse"/>
+                                          High Potential
+                                        </span>
+                                      )}
+                                      {d.liveAvailability === 'checking' ? (
+                                        <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-blue-950 text-blue-300 border border-blue-800 flex items-center gap-1 animate-pulse">
+                                          <Loader2 size={11} className="animate-spin"/> Live Checking...
+                                        </span>
+                                      ) : d.liveAvailability === 'available' ? (
+                                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1" title={d.dnsStatusMessage}>
+                                          <CheckCircle2 size={12} className="text-emerald-400"/> Đã hết hạn (NXDOMAIN)
+                                        </span>
+                                      ) : d.liveAvailability === 'registered_active' ? (
+                                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-red-950/80 text-red-300 border border-red-800 flex items-center gap-1" title={d.dnsStatusMessage}>
+                                          <XCircle size={12} className="text-red-400"/> Active DNS
+                                        </span>
+                                      ) : (
+                                        <button 
+                                          onClick={(e) => checkSingleLiveDomain(d.id, e)}
+                                          className="px-2 py-0.5 rounded-md text-[9px] font-extrabold bg-slate-800 hover:bg-cyan-950 text-slate-300 hover:text-cyan-300 border border-slate-700 hover:border-cyan-700 flex items-center gap-1 transition-all"
+                                          title="Bấm để kiểm tra trực tiếp DNS/WHOIS xem domain có thực sự hết hạn không"
+                                        >
+                                          <Search size={11}/> Check Live Mua
+                                        </button>
+                                      )}
+
+                                      {d.viewDnsStatus === 'checking' ? (
+                                        <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-purple-950 text-purple-300 border border-purple-800 flex items-center gap-1 animate-pulse">
+                                          <Loader2 size={11} className="animate-spin"/> ViewDNS Checking...
+                                        </span>
+                                      ) : d.viewDnsStatus === 'has_history' ? (
+                                        <a 
+                                          href={`https://viewdns.info/iphistory/?domain=${d.url}`} 
+                                          target="_blank" 
+                                          rel="noreferrer" 
+                                          className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-purple-950 text-purple-300 border border-purple-800 flex items-center gap-1 hover:bg-purple-900 transition-all" 
+                                          title={d.viewDnsMessage || 'Đã xác minh có lịch sử IP trên ViewDNS'}
+                                        >
+                                          <Server size={11} className="text-purple-400"/> ViewDNS ({d.viewDnsIPCount || 1}+ IP History)
+                                        </a>
+                                      ) : d.viewDnsStatus === 'no_history' ? (
+                                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-red-950/80 text-red-300 border border-red-800 flex items-center gap-1" title={d.viewDnsMessage}>
+                                          <XCircle size={11} className="text-red-400"/> ViewDNS: Không có lịch sử
+                                        </span>
+                                      ) : (
+                                        <button 
+                                          onClick={(e) => checkSingleViewDnsHistory(d.id, e)}
+                                          className="px-2 py-0.5 rounded-md text-[9px] font-extrabold bg-slate-800 hover:bg-purple-950 text-slate-300 hover:text-purple-300 border border-slate-700 hover:border-purple-700 flex items-center gap-1 transition-all"
+                                          title="Bấm để tự động kiểm tra lịch sử IP trên ViewDNS.info"
+                                        >
+                                          <Server size={11}/> Check ViewDNS
+                                        </button>
+                                      )}
                                     </div>
                                     <div className="flex gap-4 mt-2 text-[10px] font-black uppercase tracking-wider">
                                         <span className="flex flex-col"><span className="text-slate-600">DR</span><b className="text-orange-400 text-xs">{d.dr}</b></span>
@@ -599,13 +1351,48 @@ export default function App() {
                                       </div>
                                     )}
                                 </td>
+                                <td className="p-6 text-[10px]">
+                                    <div className="space-y-1.5 max-w-[210px]">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-slate-400 font-bold uppercase tracking-wider text-[9px]">Điểm Tiềm Năng:</span>
+                                            <b className={`font-mono text-xs font-black ${
+                                                (d.growthPotentialScore || 0) >= 70 ? 'text-emerald-400' :
+                                                (d.growthPotentialScore || 0) >= 50 ? 'text-amber-400' : 'text-slate-400'
+                                            }`}>
+                                                {d.growthPotentialScore}/100
+                                            </b>
+                                        </div>
+                                        
+                                        <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                                            <div 
+                                              className={`h-full transition-all rounded-full ${
+                                                (d.growthPotentialScore || 0) >= 70 ? 'bg-gradient-to-r from-emerald-500 to-teal-400' :
+                                                (d.growthPotentialScore || 0) >= 50 ? 'bg-gradient-to-r from-amber-500 to-orange-400' : 'bg-slate-600'
+                                              }`} 
+                                              style={{ width: `${Math.min(100, Math.max(5, d.growthPotentialScore || 0))}%` }}
+                                            />
+                                        </div>
+
+                                        {d.growthPotentialReasons && d.growthPotentialReasons.length > 0 && (
+                                            <div className="flex flex-col gap-1 pt-0.5">
+                                                {d.growthPotentialReasons.map((reason, idx) => (
+                                                    <span key={idx} className="text-[9px] text-slate-300 bg-slate-950/80 px-2 py-0.5 rounded-lg border border-slate-800 flex items-center gap-1.5">
+                                                        <TrendingUp size={10} className="text-amber-400 flex-shrink-0"/>
+                                                        <span className="truncate">{reason}</span>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </td>
                                 <td className="p-6">
-                                    <div className="grid grid-cols-2 gap-2 max-w-[320px] mx-auto">
-                                        <a href={`https://transparencyreport.google.com/safe-browsing/search?url=${d.url}`} target="_blank" className="bg-slate-800 hover:bg-emerald-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-emerald-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><ShieldCheck size={12}/> GOOGLE SAFE</a>
-                                        <a href={`https://web.archive.org/web/*/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-blue-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-blue-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><History size={12}/> WAYBACK</a>
-                                        <a href={`https://www.virustotal.com/gui/domain/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-indigo-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-indigo-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><Bug size={12}/> VIRUSTOTAL</a>
-                                        <a href={`https://archive.is/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-amber-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-amber-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><Archive size={12}/> ARCHIVE.IS</a>
-                                         <a href={`https://sitecheck.sucuri.net/results/${d.url}`} target="_blank" className="bg-slate-800 hover:bg-red-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-red-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all col-span-2"><ShieldAlert size={12}/> SUCURI SECURE</a>
+                                    <div className="grid grid-cols-2 gap-2 max-w-[340px] mx-auto">
+                                        <a href={`https://lookup.icann.org/en/lookup?name=${d.url}`} target="_blank" rel="noreferrer" className="bg-slate-800 hover:bg-cyan-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-cyan-300 flex items-center justify-center gap-1.5 border border-slate-700 transition-all" title="Kiểm tra trực tiếp thông tin WHOIS chính thức của ICANN"><Globe size={12}/> ICANN WHOIS</a>
+                                        <a href={`https://www.godaddy.com/domainsearch/find?checkAvail=1&domainToCheck=${d.url}`} target="_blank" rel="noreferrer" className="bg-slate-800 hover:bg-emerald-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-emerald-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all" title="Kiểm tra tình trạng tự do mua trên GoDaddy"><ShoppingCart size={12}/> GODADDY CHECK</a>
+                                        <a href={`https://web.archive.org/web/*/${d.url}`} target="_blank" rel="noreferrer" className="bg-slate-800 hover:bg-blue-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-blue-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><History size={12}/> WAYBACK</a>
+                                        <a href={`https://viewdns.info/iphistory/?domain=${d.url}`} target="_blank" rel="noreferrer" className="bg-slate-800 hover:bg-purple-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-purple-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all" title="Lịch sử đổi IP hosting/DNS trên ViewDNS"><Server size={12}/> VIEWDNS IP</a>
+                                        <a href={`https://transparencyreport.google.com/safe-browsing/search?url=${d.url}`} target="_blank" rel="noreferrer" className="bg-slate-800 hover:bg-emerald-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-emerald-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><ShieldCheck size={12}/> GOOGLE SAFE</a>
+                                        <a href={`https://www.virustotal.com/gui/domain/${d.url}`} target="_blank" rel="noreferrer" className="bg-slate-800 hover:bg-indigo-950 p-2 rounded-xl text-[9px] font-black text-slate-400 hover:text-indigo-400 flex items-center justify-center gap-1.5 border border-slate-700 transition-all"><Bug size={12}/> VIRUSTOTAL</a>
                                     </div>
                                 </td>
                                 <td className="p-6 text-right">
@@ -617,11 +1404,27 @@ export default function App() {
                         ))}
                     </tbody>
                 </table>
-                {cleanDomains.length === 0 && (
+                {displayedDomains.length === 0 && (
                   <div className="p-32 text-center bg-slate-950/30">
                     <Database size={64} className="mx-auto text-slate-800 mb-6"/>
-                    <p className="text-xl font-bold text-slate-600 uppercase tracking-widest">Không có dữ liệu sạch</p>
-                    <p className="text-slate-700 mt-2 font-medium italic">Vui lòng điều chỉnh lại bộ lọc chỉ số hoặc quét thêm dữ liệu mới.</p>
+                    <p className="text-xl font-bold text-slate-600 uppercase tracking-widest">
+                      {filterMode === 'high_potential' 
+                        ? "Không có domain đạt chuẩn High Potential" 
+                        : filterMode === 'available_only'
+                        ? "Chưa có domain nào được xác nhận đã hết hạn (NXDOMAIN)"
+                        : filterMode === 'has_viewdns_history'
+                        ? "Chưa có domain nào được xác nhận có lịch sử IP trên ViewDNS.info"
+                        : "Không có dữ liệu sạch"}
+                    </p>
+                    <p className="text-slate-700 mt-2 font-medium italic">
+                      {filterMode === 'available_only' 
+                        ? "Hãy nhấn nút 'Check Live Hết Hạn' để kiểm tra danh sách domain hiện tại."
+                        : filterMode === 'has_viewdns_history'
+                        ? "Hãy nhấn nút 'Check Lịch Sử ViewDNS' để tự động kiểm tra lịch sử."
+                        : filterMode === 'high_potential'
+                        ? "Thử chuyển về tab Tất cả để kiểm tra danh sách domain."
+                        : "Vui lòng điều chỉnh lại bộ lọc chỉ số hoặc quét thêm dữ liệu mới."}
+                    </p>
                   </div>
                 )}
             </div>
@@ -660,6 +1463,11 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-6">
+            <div className="hidden lg:flex items-center gap-2 px-3.5 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-400 font-bold shadow-inner" title="Nhấn Ctrl + Enter từ bất kỳ đâu để quét nhanh">
+                <Zap size={14} className="text-amber-400 fill-amber-400 animate-pulse"/>
+                <span>Quét nhanh:</span>
+                <kbd className="bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded border border-slate-700 font-mono text-[10px]">Ctrl</kbd> + <kbd className="bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded border border-slate-700 font-mono text-[10px]">Enter</kbd>
+            </div>
             <div className="flex gap-4">
                 <a href="https://t.me/hima_dev" target="_blank" className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-5 py-2.5 rounded-xl text-xs font-black border border-blue-500/30 flex items-center gap-2 transition-all hover:scale-105">
                     <Send size={14}/> Telegram @hima_dev
@@ -718,6 +1526,61 @@ export default function App() {
                     <button type="submit" className="w-full bg-blue-600 text-white p-4 rounded-2xl font-black flex items-center justify-center gap-2 shadow-xl shadow-blue-900/30 hover:bg-blue-500 transition-all hover:scale-[1.02] active:scale-95"><Send size={18}/> GỬI BÁO CÁO NGAY</button>
                 </form>
             </div>
+        </div>
+      )}
+
+      {showBulkTldModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-black text-white flex items-center gap-2">
+                <Layers className="text-blue-500"/> Thêm TLD Hàng Loạt (Bulk Add TLDs)
+              </h3>
+              <button onClick={() => setShowBulkTldModal(false)} className="text-slate-500 hover:text-white p-1 rounded-full hover:bg-slate-800 transition-colors">
+                <X/>
+              </button>
+            </div>
+            <form onSubmit={handleBulkTldAdd} className="space-y-6">
+              <p className="text-sm text-slate-400 font-medium">
+                Dán danh sách đuôi tên miền (TLD) phân cách bằng <b>dấu phẩy (,), khoảng trắng, hoặc xuống dòng</b>:
+              </p>
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4">
+                <textarea 
+                  required 
+                  value={bulkTldInput} 
+                  onChange={e => setBulkTldInput(e.target.value)} 
+                  className="w-full h-40 bg-transparent text-emerald-400 font-mono text-sm outline-none resize-none custom-scrollbar" 
+                  placeholder=".com, .net, .org, .info, .io, .vn, .jp, .app, .xyz"
+                ></textarea>
+              </div>
+              <div className="flex gap-2 text-xs text-slate-500">
+                <span>Ví dụ:</span>
+                <code className="text-blue-400 font-mono">.com, .net, .org, io, vn, app</code>
+              </div>
+              <div className="flex gap-4">
+                <button 
+                  type="button" 
+                  onClick={() => setShowBulkTldModal(false)} 
+                  className="flex-1 bg-slate-800 text-slate-300 p-4 rounded-2xl font-black hover:bg-slate-700 transition-all uppercase tracking-wider text-xs"
+                >
+                  Hủy
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 bg-blue-600 text-white p-4 rounded-2xl font-black flex items-center justify-center gap-2 shadow-xl shadow-blue-900/30 hover:bg-blue-500 transition-all hover:scale-[1.02] active:scale-95 uppercase tracking-wider text-xs"
+                >
+                  <Plus size={18}/> THÊM VÀO DANH SÁCH
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {copyToast && (
+        <div className="fixed bottom-10 right-10 z-[70] bg-emerald-600 text-white font-extrabold px-6 py-4 rounded-2xl shadow-2xl shadow-emerald-950 flex items-center gap-3 animate-in slide-in-from-bottom-5 border border-emerald-400">
+          <CheckCircle2 size={22} className="text-white flex-shrink-0"/>
+          <span className="text-sm font-bold">{copyToast}</span>
         </div>
       )}
       
