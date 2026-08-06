@@ -329,11 +329,12 @@ export default function App() {
           processed++;
           
           let fullUrl = '';
+          let randomTLD = '.com';
           let attempts = 0;
           do {
             const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
             const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
-            const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)] || '.com';
+            randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)] || '.com';
             
             const extraTag = attempts > 0 ? `${getRandomInt(10, 99999)}` : '';
             const suffix = (Math.random() > 0.6 || attempts > 0) ? `${getRandomInt(1, 99)}${extraTag}` : '';
