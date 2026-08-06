@@ -22,6 +22,137 @@ const REG_FEES: Record<string, number> = {
 const INITIAL_TLDS = Object.keys(REG_FEES);
 const getRandomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 
+interface TrafficForecastSparklineProps {
+  domain: DomainEntity;
+}
+
+const TrafficForecastSparkline: React.FC<TrafficForecastSparklineProps> = ({ domain }) => {
+  const [hoverMonth, setHoverMonth] = useState<number | null>(null);
+
+  const forecastData = useMemo(() => {
+    const currentTraffic = domain.traffic || 0;
+    const dr = domain.dr || 0;
+    const rd = domain.rd || 0;
+    const score = domain.growthPotentialScore || 50;
+    
+    // Baseline potential for domains with low or 0 traffic but good DR/RD
+    const baseVal = Math.max(currentTraffic, Math.round((dr * 12 + rd * 3 + score * 4)));
+    
+    // Growth velocity factor based on domain metrics
+    const growthRate = 0.08 + (score / 100) * 0.18 + (dr > 30 ? 0.08 : dr > 15 ? 0.04 : 0.01);
+
+    const months = [
+      { month: 'Hiện tại', label: 'T0', val: currentTraffic },
+      { month: 'Tháng 1', label: 'T1', val: Math.round(baseVal * (1 + growthRate * 0.4)) },
+      { month: 'Tháng 2', label: 'T2', val: Math.round(baseVal * (1 + growthRate * 0.9)) },
+      { month: 'Tháng 3', label: 'T3', val: Math.round(baseVal * (1 + growthRate * 1.5)) },
+      { month: 'Tháng 4', label: 'T4', val: Math.round(baseVal * (1 + growthRate * 2.2)) },
+      { month: 'Tháng 5', label: 'T5', val: Math.round(baseVal * (1 + growthRate * 3.0)) },
+      { month: 'Tháng 6', label: 'T6', val: Math.round(baseVal * (1 + growthRate * 4.0)) },
+    ];
+
+    const minVal = Math.min(...months.map(m => m.val));
+    const maxVal = Math.max(...months.map(m => m.val), 10);
+
+    const projectedM6 = months[6].val;
+    const growthPercent = currentTraffic > 0 
+      ? Math.round(((projectedM6 - currentTraffic) / currentTraffic) * 100)
+      : Math.round(((projectedM6 - Math.max(1, baseVal)) / Math.max(1, baseVal)) * 100 + 150);
+
+    return { months, minVal, maxVal, projectedM6, growthPercent };
+  }, [domain.traffic, domain.dr, domain.rd, domain.growthPotentialScore]);
+
+  const { months, minVal, maxVal, projectedM6, growthPercent } = forecastData;
+
+  const width = 190;
+  const height = 40;
+  const padding = 5;
+
+  const points = months.map((m, idx) => {
+    const x = padding + (idx / (months.length - 1)) * (width - padding * 2);
+    const range = maxVal - minVal || 1;
+    const y = height - padding - ((m.val - minVal) / range) * (height - padding * 2);
+    return { x, y, val: m.val, label: m.label, month: m.month };
+  });
+
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const areaD = `${pathD} L ${points[points.length - 1].x.toFixed(1)} ${height} L ${points[0].x.toFixed(1)} ${height} Z`;
+
+  const isHighGrowth = (domain.growthPotentialScore || 50) >= 70;
+  const strokeColor = isHighGrowth ? '#10b981' : (domain.growthPotentialScore || 50) >= 50 ? '#f59e0b' : '#3b82f6';
+  const strokeGradId = `traffic-grad-${domain.id.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+  const activePoint = hoverMonth !== null ? points[hoverMonth] : null;
+
+  return (
+    <div className="mt-2 p-2 rounded-xl bg-slate-950/90 border border-slate-800/80 shadow-inner group/sparkline relative">
+      <div className="flex items-center justify-between gap-1 text-[9px] font-extrabold mb-1">
+        <span className="text-slate-400 flex items-center gap-1">
+          <TrendingUp size={11} className={isHighGrowth ? "text-emerald-400" : "text-amber-400"} />
+          Dự báo Traffic (6T):
+        </span>
+        <span className={`font-mono text-[9px] font-black px-1.5 py-0.2 rounded border ${
+          growthPercent >= 100 
+            ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/80' 
+            : 'bg-amber-950/80 text-amber-400 border-amber-800/80'
+        }`}>
+          +{growthPercent}% ➔ ~{projectedM6 >= 1000 ? `${(projectedM6 / 1000).toFixed(1)}k` : projectedM6}/tháng
+        </span>
+      </div>
+
+      <div className="relative">
+        <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
+          <defs>
+            <linearGradient id={strokeGradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={strokeColor} stopOpacity="0.4" />
+              <stop offset="100%" stopColor={strokeColor} stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          {/* Area under curve */}
+          <path d={areaD} fill={`url(#${strokeGradId})`} />
+
+          {/* Line path */}
+          <path d={pathD} fill="none" stroke={strokeColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+
+          {/* Data Points */}
+          {points.map((p, idx) => (
+            <circle
+              key={idx}
+              cx={p.x}
+              cy={p.y}
+              r={hoverMonth === idx ? "3.5" : "2"}
+              fill={hoverMonth === idx ? "#ffffff" : strokeColor}
+              stroke={strokeColor}
+              strokeWidth="1.2"
+              className="cursor-pointer transition-all duration-150"
+              onMouseEnter={() => setHoverMonth(idx)}
+              onMouseLeave={() => setHoverMonth(null)}
+            />
+          ))}
+        </svg>
+
+        {/* Hover Tooltip */}
+        {activePoint && (
+          <div 
+            className="absolute -top-7 -translate-x-1/2 bg-slate-900 text-white text-[9px] font-black px-2 py-0.5 rounded border border-slate-700 shadow-xl pointer-events-none z-30 whitespace-nowrap flex items-center gap-1"
+            style={{ left: `${(activePoint.x / width) * 100}%` }}
+          >
+            <span className="text-slate-400">{activePoint.month}:</span>
+            <span className="text-emerald-400 font-mono">~{activePoint.val.toLocaleString()} visit</span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex justify-between items-center text-[8px] text-slate-500 font-mono mt-1 px-0.5">
+        <span>T0 ({domain.traffic.toLocaleString()})</span>
+        <span>T3 (~{points[3].val >= 1000 ? `${(points[3].val / 1000).toFixed(1)}k` : points[3].val})</span>
+        <span className="text-emerald-400 font-bold">T6 (~{projectedM6 >= 1000 ? `${(projectedM6 / 1000).toFixed(1)}k` : projectedM6})</span>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -41,7 +172,7 @@ export default function App() {
   const [availableTlds, setAvailableTlds] = useState<string[]>(INITIAL_TLDS);
   const [showBulkTldModal, setShowBulkTldModal] = useState(false);
   const [bulkTldInput, setBulkTldInput] = useState("");
-  const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'has_viewdns_history'>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'has_viewdns_history' | 'duplicate_only'>('all');
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [singleCopiedId, setSingleCopiedId] = useState<string | null>(null);
   const [isLiveChecking, setIsLiveChecking] = useState(false);
@@ -76,7 +207,7 @@ export default function App() {
 
   const [filterConfig, setFilterConfig] = useState<FilterConfig>({
     minDR: 10, minUR: 10, minRD: 5, minTF: 5, minCF: 5, 
-    maxPrice: 35, 
+    maxPrice: 40, 
     excludeAdult: true, excludeGambling: true, excludeHyphenDomains: true,
     requireArchiveHistory: true,
     minArchiveSnapshots: 5,
@@ -87,12 +218,21 @@ export default function App() {
     allowedTLDs: [],
   });
   const [allowedMarketplaces, setAllowedMarketplaces] = useState<MarketplaceType[]>(['SAV', 'Namecheap', 'Registry']);
+  const scannedHistoryRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
       const user = getCurrentUser();
       setCurrentUser(user);
       setAuthChecked(true);
   }, []);
+
+  useEffect(() => {
+    domains.forEach(d => {
+      if (d.url) {
+        scannedHistoryRef.current.add(d.url.toLowerCase().trim());
+      }
+    });
+  }, [domains]);
 
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -142,6 +282,10 @@ export default function App() {
     }
     
     setIsProcessing(true);
+    const existingHistoryCount = scannedHistoryRef.current.size;
+    if (existingHistoryCount > 0) {
+      addLog(`🛡️ Chống quét trùng lặp: Hệ thống đang tự động bỏ qua ${existingHistoryCount.toLocaleString()} domain đã từng quét...`);
+    }
     addLog(`${isAppending ? 'Đang quét thêm' : 'Khởi động engine quét'} ${scanLimit.toLocaleString()} domain...`);
     
     try {
@@ -158,12 +302,16 @@ export default function App() {
       }
 
       let processed = 0;
+      let skippedDuplicatesCount = 0;
       const batchSize = 100;
 
       const runBatch = () => {
         if (processed >= scanLimit) {
           setIsProcessing(false);
-          addLog(`Hoàn tất quét. Đã xử lý xong ${scanLimit.toLocaleString()} domain.`);
+          addLog(`Hoàn tất quét. Đã xử lý xong ${scanLimit.toLocaleString()} domain mới.`);
+          if (skippedDuplicatesCount > 0) {
+            addLog(`🛡️ Đã tự động bỏ qua ${skippedDuplicatesCount.toLocaleString()} tên miền bị trùng lặp với lịch sử quét.`);
+          }
           
           if (!isAppending) {
             setCurrentStep(Step.Filter);
@@ -179,12 +327,27 @@ export default function App() {
         const newBatch: DomainEntity[] = [];
         for (let i = 0; i < batchSize && processed < scanLimit; i++) {
           processed++;
-          const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
-          const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
-          const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)] || '.com';
           
-          const suffix = Math.random() > 0.6 ? getRandomInt(1, 99) : '';
-          const fullUrl = `${nameRoot}${suffix}${randomTLD}`;
+          let fullUrl = '';
+          let attempts = 0;
+          do {
+            const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
+            const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
+            const randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)] || '.com';
+            
+            const extraTag = attempts > 0 ? `${getRandomInt(10, 99999)}` : '';
+            const suffix = (Math.random() > 0.6 || attempts > 0) ? `${getRandomInt(1, 99)}${extraTag}` : '';
+            fullUrl = `${nameRoot}${suffix}${randomTLD}`.toLowerCase().trim();
+            
+            attempts++;
+          } while (scannedHistoryRef.current.has(fullUrl) && attempts < 50);
+
+          if (scannedHistoryRef.current.has(fullUrl)) {
+            skippedDuplicatesCount++;
+          }
+
+          // Ghi nhớ URL này vào bộ nhớ để không bao giờ quét lại
+          scannedHistoryRef.current.add(fullUrl);
           
           const hasHistoryRoll = Math.random() > 0.15;
           const archiveSnapshots = hasHistoryRoll ? getRandomInt(1, 1500) : 0;
@@ -254,11 +417,13 @@ export default function App() {
   };
 
   const autoAuditNewDomains = () => {
+    let totalDupesFound = 0;
     setDomains(prev => {
       const updated = prev.map(d => {
         if (d.status !== DomainStatus.Pending) return d;
 
-        const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && d.price <= filterConfig.maxPrice;
+        const meetsPrice = d.price <= filterConfig.maxPrice && d.price <= 40;
+        const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && meetsPrice;
         const meetsMarket = allowedMarketplaces.includes(d.marketplace);
         const passesHyphenCheck = filterConfig.excludeHyphenDomains ? !d.url.includes('-') : true;
         
@@ -277,16 +442,31 @@ export default function App() {
         const passesLang = !filterConfig.excludeWaybackForeignLanguageSpam || !hasLangSpam;
         const passesDeepAudit = !filterConfig.enableDeepWaybackAudit || (d.waybackClean && !hasPbnSpam);
 
-        const isClean = isValidCandidate && d.indexed && !hasNoArchive && passes301 && passesLang && passesDeepAudit && (d.waybackScore >= 50);
+        const isClean = isValidCandidate && d.indexed && !hasNoArchive && passes301 && passesLang && passesDeepAudit && (d.waybackScore >= 50) && meetsPrice;
 
         return {
           ...d,
           status: isClean ? DomainStatus.Clean : (isValidCandidate ? DomainStatus.Penalized : DomainStatus.Spam)
         };
       });
+
+      const counts = new Map<string, number>();
+      updated.forEach(d => {
+        const k = d.url.toLowerCase().trim();
+        counts.set(k, (counts.get(k) || 0) + 1);
+      });
+      counts.forEach((val) => {
+        if (val > 1) totalDupesFound += (val - 1);
+      });
+
       return updated;
     });
-    addLog("✅ Hoàn tất thẩm định lô domain quét thêm!");
+
+    if (totalDupesFound > 0) {
+      addLog(`⚠️ Quét thêm thành công! Phát hiện & đánh dấu ${totalDupesFound} tên miền trùng lặp trong danh sách.`);
+    } else {
+      addLog("✅ Hoàn tất thẩm định lô domain quét thêm!");
+    }
   };
 
   const startCrawlRef = useRef(startCrawl);
@@ -320,7 +500,8 @@ export default function App() {
     
     // Bước 1: Lọc dữ liệu thô
     const updated = domains.map(d => {
-      const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && d.price <= filterConfig.maxPrice;
+      const meetsPrice = d.price <= filterConfig.maxPrice && d.price <= 40;
+      const meetsMetrics = d.dr >= filterConfig.minDR && d.tf >= filterConfig.minTF && meetsPrice;
       const meetsMarket = allowedMarketplaces.includes(d.marketplace);
       const passesHyphenCheck = filterConfig.excludeHyphenDomains ? !d.url.includes('-') : true;
       
@@ -396,8 +577,8 @@ export default function App() {
       const passesLang = !filterConfig.excludeWaybackForeignLanguageSpam || !hasLangSpam;
       const passesDeepAudit = !filterConfig.enableDeepWaybackAudit || (waybackClean && !hasPbnSpam);
 
-      // Domain Cổ hợp lệ = Đã index + Có ít nhất 1 snapshot trên Archive.org + Không dính spam + Score >= 50
-      const isClean = d.indexed && !hasNoArchive && passes301 && passesLang && passesDeepAudit && (waybackScore >= 50);
+      // Domain Cổ hợp lệ = Đã index + Có ít nhất 1 snapshot trên Archive.org + Không dính spam + Score >= 50 + Giá mua <= 40$
+      const isClean = d.indexed && !hasNoArchive && passes301 && passesLang && passesDeepAudit && (waybackScore >= 50) && (d.price <= 40) && (d.price <= filterConfig.maxPrice);
 
       return {
         ...d,
@@ -416,10 +597,21 @@ export default function App() {
     setCurrentStep(Step.Output);
   };
 
+  const domainUrlCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    domains.forEach(d => {
+      const key = d.url.toLowerCase().trim();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }, [domains]);
+
   const cleanDomainsWithGrowth = useMemo(() => {
     return domains
       .filter(d => 
         d.status === DomainStatus.Clean && 
+        d.price <= 40 &&
+        d.price <= filterConfig.maxPrice &&
         d.archiveSnapshots >= 1 && 
         d.archiveFirstSeen > 0 && 
         !d.waybackSpamFlags.includes('No Wayback Archive Found') &&
@@ -427,14 +619,18 @@ export default function App() {
       )
       .map(d => {
         const growth = evaluateGrowthPotential(d);
+        const key = d.url.toLowerCase().trim();
+        const dupCount = domainUrlCounts.get(key) || 1;
         return {
           ...d,
+          isDuplicate: dupCount > 1,
+          duplicateCount: dupCount,
           growthPotentialScore: growth.score,
           isHighPotential: growth.isHighPotential,
           growthPotentialReasons: growth.reasons,
         };
       });
-  }, [domains]);
+  }, [domains, domainUrlCounts]);
 
   const highPotentialCount = useMemo(() => {
     return cleanDomainsWithGrowth.filter(d => d.isHighPotential).length;
@@ -448,6 +644,10 @@ export default function App() {
     return cleanDomainsWithGrowth.filter(d => d.viewDnsStatus === 'has_history').length;
   }, [cleanDomainsWithGrowth]);
 
+  const duplicateDomainsCount = useMemo(() => {
+    return cleanDomainsWithGrowth.filter(d => d.isDuplicate).length;
+  }, [cleanDomainsWithGrowth]);
+
   const displayedDomains = useMemo(() => {
     if (filterMode === 'high_potential') {
       return cleanDomainsWithGrowth.filter(d => d.isHighPotential);
@@ -457,6 +657,9 @@ export default function App() {
     }
     if (filterMode === 'has_viewdns_history') {
       return cleanDomainsWithGrowth.filter(d => d.viewDnsStatus === 'has_history');
+    }
+    if (filterMode === 'duplicate_only') {
+      return cleanDomainsWithGrowth.filter(d => d.isDuplicate);
     }
     return cleanDomainsWithGrowth;
   }, [cleanDomainsWithGrowth, filterMode]);
@@ -830,29 +1033,86 @@ export default function App() {
     setTimeout(() => setCopyToast(null), 4000);
   };
 
+  const deleteSingleDomain = (domainId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const target = domains.find(d => d.id === domainId);
+    setDomains(prev => prev.filter(d => d.id !== domainId));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.delete(domainId);
+      return next;
+    });
+    if (target) {
+      addLog(`🗑️ Đã xóa tên miền: ${target.url}`);
+    }
+    setCopyToast("🗑️ Đã xóa tên miền khỏi danh sách!");
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+
   const deleteSelected = () => {
     if (selectedIds.size === 0) return;
-    if (confirm(`Xóa ${selectedIds.size} tên miền đã chọn khỏi danh sách?`)) {
-        setDomains(prev => prev.filter(d => !selectedIds.has(d.id)));
-        setSelectedIds(new Set());
-        addLog(`Đã xóa ${selectedIds.size} tên miền thành công.`);
+    const count = selectedIds.size;
+    setDomains(prev => prev.filter(d => !selectedIds.has(d.id)));
+    setSelectedIds(new Set());
+    addLog(`🗑️ Đã xóa thành công ${count} tên miền đã chọn.`);
+    setCopyToast(`🗑️ Đã xóa thành công ${count} tên miền đã chọn!`);
+    setTimeout(() => setCopyToast(null), 3000);
+  };
+
+  const removeDuplicateDomains = () => {
+    const seen = new Set<string>();
+    let removedCount = 0;
+    setDomains(prev => {
+      const filtered: DomainEntity[] = [];
+      for (const d of prev) {
+        const key = d.url.toLowerCase().trim();
+        if (seen.has(key)) {
+          removedCount++;
+        } else {
+          seen.add(key);
+          filtered.push(d);
+        }
+      }
+      return filtered;
+    });
+
+    if (removedCount > 0) {
+      if (filterMode === 'duplicate_only') {
+        setFilterMode('all');
+      }
+      addLog(`🧹 Đã tự động lọc và xóa ${removedCount} tên miền trùng lặp, chỉ giữ lại các bản duy nhất.`);
+      setCopyToast(`🧹 Đã xóa ${removedCount} tên miền trùng lặp khỏi danh sách!`);
+    } else {
+      setCopyToast("✨ Danh sách sạch, không có tên miền nào bị trùng lặp!");
     }
+    setTimeout(() => setCopyToast(null), 3000);
   };
 
   const exportToCSV = () => {
-    const headers = ["Domain", "DR", "TF", "Traffic", "Price", "Marketplace", "Status", "Growth Score", "High Potential", "Reasons"];
-    const rows = displayedDomains.map(d => [
-      d.url, 
-      d.dr, 
-      d.tf, 
-      d.traffic, 
-      d.price, 
-      d.marketplace, 
-      d.isAuction ? 'Auction' : 'Registry',
-      d.growthPotentialScore || 0,
-      d.isHighPotential ? 'Yes' : 'No',
-      `"${(d.growthPotentialReasons || []).join('; ')}"`
-    ]);
+    const headers = ["Domain", "DR", "TF", "Current Traffic", "Projected M6 Traffic", "Price", "Marketplace", "Status", "Growth Score", "High Potential", "Reasons"];
+    const rows = displayedDomains.map(d => {
+      const currentTraffic = d.traffic || 0;
+      const dr = d.dr || 0;
+      const rd = d.rd || 0;
+      const score = d.growthPotentialScore || 50;
+      const baseVal = Math.max(currentTraffic, Math.round((dr * 12 + rd * 3 + score * 4)));
+      const growthRate = 0.08 + (score / 100) * 0.18 + (dr > 30 ? 0.08 : dr > 15 ? 0.04 : 0.01);
+      const projectedM6 = Math.round(baseVal * (1 + growthRate * 4.0));
+
+      return [
+        d.url, 
+        d.dr, 
+        d.tf, 
+        d.traffic, 
+        projectedM6,
+        d.price, 
+        d.marketplace, 
+        d.isAuction ? 'Auction' : 'Registry',
+        d.growthPotentialScore || 0,
+        d.isHighPotential ? 'Yes' : 'No',
+        `"${(d.growthPotentialReasons || []).join('; ')}"`
+      ];
+    });
     let csv = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csv));
@@ -972,7 +1232,15 @@ export default function App() {
                 <h3 className="text-2xl font-black mb-10 flex items-center gap-4 text-emerald-500"><Filter/> Cấu hình SEO & Ngân sách</h3>
                 <FilterControl label="Domain Rating (DR)" min={0} max={100} value={filterConfig.minDR} onChange={v => setFilterConfig({...filterConfig, minDR: v})}/>
                 <FilterControl label="Trust Flow (TF)" min={0} max={100} value={filterConfig.minTF} onChange={v => setFilterConfig({...filterConfig, minTF: v})}/>
-                <FilterControl label="Ngân sách tối đa ($)" min={5} max={1000} value={filterConfig.maxPrice} onChange={v => setFilterConfig({...filterConfig, maxPrice: v})} colorClass="bg-emerald-500"/>
+                <FilterControl 
+                  label="Ngân sách mua tối đa ($)" 
+                  min={5} 
+                  max={100} 
+                  value={filterConfig.maxPrice} 
+                  onChange={v => setFilterConfig({...filterConfig, maxPrice: v})} 
+                  colorClass="bg-emerald-500"
+                  description="⚠️ Quy tắc duyệt: Tên miền có giá mua vượt quá 40$ sẽ KHÔNG bao giờ được duyệt vào danh sách Clean"
+                />
                 
                 <div className="mt-8 bg-slate-950 p-6 rounded-3xl border border-slate-800 space-y-4">
                   <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest flex items-center gap-2">
@@ -1160,9 +1428,33 @@ export default function App() {
                         <Server size={15} className="text-purple-400"/>
                         <span>🌐 Có Lịch Sử ViewDNS ({viewDnsHistoryCount.toLocaleString()})</span>
                       </button>
+
+                      {duplicateDomainsCount > 0 && (
+                        <button
+                          onClick={() => setFilterMode('duplicate_only')}
+                          className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
+                            filterMode === 'duplicate_only' 
+                              ? 'bg-amber-600 text-white border-amber-400 shadow-lg shadow-amber-900/50 scale-105' 
+                              : 'bg-amber-950/40 text-amber-300 border-amber-800/80 hover:bg-amber-900/60'
+                          }`}
+                        >
+                          <Layers size={15} className="text-amber-400"/>
+                          <span>⚠️ Trùng Lặp ({duplicateDomainsCount.toLocaleString()})</span>
+                        </button>
+                      )}
                     </div>
                 </div>
                 <div className="flex flex-wrap gap-4">
+                    {duplicateDomainsCount > 0 && (
+                      <button 
+                        onClick={removeDuplicateDomains} 
+                        className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-amber-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 animate-bounce"
+                        title="Tự động lọc và xóa bỏ các bản trùng lặp trong danh sách, chỉ giữ lại 1 bản duy nhất"
+                      >
+                        <Layers size={20}/>
+                        <span>Lọc Bỏ Trùng Lặp ({duplicateDomainsCount})</span>
+                      </button>
+                    )}
                     <button 
                       onClick={batchCheckViewDnsHistory} 
                       disabled={isViewDnsChecking || displayedDomains.length === 0} 
@@ -1229,7 +1521,7 @@ export default function App() {
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
                         {displayedDomains.slice(0, 1000).map((d) => (
-                            <tr key={d.id} className={`hover:bg-blue-600/5 transition-all group ${selectedIds.has(d.id) ? 'bg-blue-900/10' : ''}`}>
+                            <tr key={d.id} className={`hover:bg-blue-600/5 transition-all group ${d.isDuplicate ? 'bg-amber-950/25 border-l-4 border-l-amber-500' : ''} ${selectedIds.has(d.id) ? 'bg-blue-900/20' : ''}`}>
                                 <td className="p-6 text-center"><input type="checkbox" checked={selectedIds.has(d.id)} onChange={() => {
                                     const next = new Set(selectedIds);
                                     if(next.has(d.id)) next.delete(d.id); else next.add(d.id);
@@ -1248,6 +1540,11 @@ export default function App() {
                                         </button>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                      {d.isDuplicate && (
+                                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-amber-950 text-amber-300 border border-amber-700/80 flex items-center gap-1 shadow-md" title={`Tên miền bị trùng lặp ${d.duplicateCount} lần trong danh sách`}>
+                                          <Layers size={11} className="text-amber-400"/> Trùng lặp ({d.duplicateCount}x)
+                                        </span>
+                                      )}
                                       {d.isHighPotential && (
                                         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[10px] font-black bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-amber-300 border border-amber-500/50 shadow-md shadow-amber-950/50">
                                           <Flame size={12} className="text-amber-400 fill-amber-400 animate-pulse"/>
@@ -1383,6 +1680,9 @@ export default function App() {
                                                 ))}
                                             </div>
                                         )}
+
+                                        {/* Sparkline mini chart for 6-month forecasted traffic */}
+                                        <TrafficForecastSparkline domain={d} />
                                     </div>
                                 </td>
                                 <td className="p-6">
@@ -1396,9 +1696,18 @@ export default function App() {
                                     </div>
                                 </td>
                                 <td className="p-6 text-right">
-                                    <a href={d.marketplace === 'SAV' ? `https://marketing.sav.com/domains?search=${d.url}` : `https://www.namecheap.com/domains/registration/results/?domain=${d.url}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-2xl text-xs font-black inline-flex items-center gap-2 shadow-lg shadow-blue-900/30 transition-all hover:scale-105 active:scale-95">
-                                        {d.isAuction ? <Gavel size={14}/> : <ShoppingCart size={14}/>} ĐẾN SÀN
-                                    </a>
+                                    <div className="flex items-center justify-end gap-2">
+                                        <a href={d.marketplace === 'SAV' ? `https://marketing.sav.com/domains?search=${d.url}` : `https://www.namecheap.com/domains/registration/results/?domain=${d.url}`} target="_blank" className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-3 rounded-2xl text-xs font-black inline-flex items-center gap-2 shadow-lg shadow-blue-900/30 transition-all hover:scale-105 active:scale-95">
+                                            {d.isAuction ? <Gavel size={14}/> : <ShoppingCart size={14}/>} ĐẾN SÀN
+                                        </a>
+                                        <button 
+                                          onClick={(e) => deleteSingleDomain(d.id, e)}
+                                          className="p-3 rounded-2xl bg-red-950/40 hover:bg-red-600 text-red-400 hover:text-white border border-red-800/60 hover:border-red-500 transition-all hover:scale-105 active:scale-95"
+                                          title="Xóa tên miền này khỏi danh sách"
+                                        >
+                                          <Trash2 size={16} />
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
                         ))}
@@ -1414,6 +1723,8 @@ export default function App() {
                         ? "Chưa có domain nào được xác nhận đã hết hạn (NXDOMAIN)"
                         : filterMode === 'has_viewdns_history'
                         ? "Chưa có domain nào được xác nhận có lịch sử IP trên ViewDNS.info"
+                        : filterMode === 'duplicate_only'
+                        ? "Danh sách hoàn toàn sạch, không có tên miền bị trùng lặp"
                         : "Không có dữ liệu sạch"}
                     </p>
                     <p className="text-slate-700 mt-2 font-medium italic">
@@ -1421,6 +1732,8 @@ export default function App() {
                         ? "Hãy nhấn nút 'Check Live Hết Hạn' để kiểm tra danh sách domain hiện tại."
                         : filterMode === 'has_viewdns_history'
                         ? "Hãy nhấn nút 'Check Lịch Sử ViewDNS' để tự động kiểm tra lịch sử."
+                        : filterMode === 'duplicate_only'
+                        ? "Tất cả các tên miền hiện tại trong bảng kết quả đều là bản ghi duy nhất."
                         : filterMode === 'high_potential'
                         ? "Thử chuyển về tab Tất cả để kiểm tra danh sách domain."
                         : "Vui lòng điều chỉnh lại bộ lọc chỉ số hoặc quét thêm dữ liệu mới."}

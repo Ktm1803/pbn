@@ -70,6 +70,8 @@ export interface DomainEntity {
   viewDnsStatus?: 'checking' | 'has_history' | 'no_history' | 'unknown';
   viewDnsIPCount?: number;
   viewDnsMessage?: string;
+  isDuplicate?: boolean;
+  duplicateCount?: number;
 }
 
 export interface GrowthEvaluation {
