@@ -74,6 +74,112 @@ export interface DomainEntity {
   duplicateCount?: number;
 }
 
+export interface SEODifficultyResult {
+  score: number; // 0 - 100 (Thấp = Dễ lên top, Cao = Khó lên top)
+  level: 'Rất Dễ' | 'Dễ' | 'Trung Bình' | 'Khó' | 'Rất Khó';
+  color: string;
+  badgeBg: string;
+  badgeText: string;
+  badgeBorder: string;
+  keywordDensity: number; // %
+  reasons: string[];
+}
+
+export function calculateSEODifficulty(d: Partial<DomainEntity>): SEODifficultyResult {
+  const dr = d.dr || 0;
+  const rd = d.rd || 0;
+  const tf = d.tf || 0;
+  const traffic = d.traffic || 0;
+  const indexed = d.indexed ?? true;
+  const url = (d.url || '').toLowerCase();
+
+  // 1. Tính Mật độ Từ khóa (Keyword Density Factor)
+  const domainParts = url.split('.');
+  const rootName = domainParts[0] || url;
+  
+  const lettersOnly = rootName.replace(/[^a-z]/g, '');
+  const digitsCount = (rootName.match(/[0-9]/g) || []).length;
+  const hyphenCount = (rootName.match(/-/g) || []).length;
+  
+  let keywordDensity = rootName.length > 0 ? Math.round((lettersOnly.length / rootName.length) * 100) : 50;
+  if (hyphenCount > 0) keywordDensity = Math.max(10, keywordDensity - hyphenCount * 15);
+  if (digitsCount > 0) keywordDensity = Math.max(10, keywordDensity - digitsCount * 10);
+  
+  if (rootName.length >= 5 && rootName.length <= 14) {
+    keywordDensity = Math.min(100, keywordDensity + 10);
+  }
+
+  // 2. Sức mạnh SEO Nội tại (Authority Score: 0 - 100)
+  const drScore = Math.min(45, dr * 1.5);
+  const rdScore = Math.min(30, Math.sqrt(rd) * 3);
+  const tfScore = Math.min(15, tf * 1.2);
+  const trafficScore = Math.min(10, Math.sqrt(traffic) * 0.2);
+  const indexBonus = indexed ? 10 : 0;
+
+  const totalAuthorityStrength = drScore + rdScore + tfScore + trafficScore + indexBonus;
+
+  // 3. Công thức Độ khó SEO: DR/RD/TF & Mật độ từ khóa càng cao -> Độ khó càng THẤP (Dễ lên top)
+  const rankingEase = Math.round((totalAuthorityStrength * 0.60) + (keywordDensity * 0.40));
+  const score = Math.max(5, Math.min(95, 100 - rankingEase));
+
+  const reasons: string[] = [];
+  let level: 'Rất Dễ' | 'Dễ' | 'Trung Bình' | 'Khó' | 'Rất Khó' = 'Trung Bình';
+  let color = 'text-amber-400';
+  let badgeBg = 'bg-amber-950/60';
+  let badgeText = 'text-amber-300';
+  let badgeBorder = 'border-amber-800/80';
+
+  if (score <= 25) {
+    level = 'Rất Dễ';
+    color = 'text-emerald-400';
+    badgeBg = 'bg-emerald-950/80';
+    badgeText = 'text-emerald-300';
+    badgeBorder = 'border-emerald-700';
+    reasons.push(`Authority mạnh (DR:${dr}, RD:${rd})`);
+    reasons.push(`Mật độ từ khóa tốt (${keywordDensity}%)`);
+  } else if (score <= 45) {
+    level = 'Dễ';
+    color = 'text-teal-400';
+    badgeBg = 'bg-teal-950/70';
+    badgeText = 'text-teal-300';
+    badgeBorder = 'border-teal-800';
+    reasons.push(`Tỉ lệ DR/RD (${dr}/${rd}) khả quan`);
+    reasons.push(`Mật độ từ khóa ${keywordDensity}%`);
+  } else if (score <= 65) {
+    level = 'Trung Bình';
+    color = 'text-amber-400';
+    badgeBg = 'bg-amber-950/60';
+    badgeText = 'text-amber-300';
+    badgeBorder = 'border-amber-800';
+    reasons.push(`Mức độ DR:${dr}, RD:${rd} cần build thêm`);
+  } else if (score <= 80) {
+    level = 'Khó';
+    color = 'text-orange-400';
+    badgeBg = 'bg-orange-950/70';
+    badgeText = 'text-orange-300';
+    badgeBorder = 'border-orange-800';
+    reasons.push(`DR thấp (${dr}), độ cạnh tranh khá cao`);
+  } else {
+    level = 'Rất Khó';
+    color = 'text-rose-400';
+    badgeBg = 'bg-rose-950/80';
+    badgeText = 'text-rose-300';
+    badgeBorder = 'border-rose-800';
+    reasons.push(`DR:${dr}, RD:${rd} rất thấp`);
+  }
+
+  return {
+    score,
+    level,
+    color,
+    badgeBg,
+    badgeText,
+    badgeBorder,
+    keywordDensity,
+    reasons
+  };
+}
+
 export interface GrowthEvaluation {
   score: number;
   isHighPotential: boolean;

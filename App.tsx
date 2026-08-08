@@ -2,15 +2,16 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StepIndicator } from './components/StepIndicator';
 import { FilterControl } from './components/FilterControl';
-import { Step, DomainEntity, DomainStatus, FilterConfig, User, PLANS, MarketplaceType, evaluateGrowthPotential } from './types';
+import { Step, DomainEntity, DomainStatus, FilterConfig, User, PLANS, MarketplaceType, evaluateGrowthPotential, calculateSEODifficulty } from './types';
 import { analyzeDomainBatch, generateMockDomains, checkWaybackBatch } from './services/geminiService';
 import { getCurrentUser, logout, submitBugReport } from './services/authService';
 import { AuthForm, SubscriptionPlan, AdminDashboard } from './components/AuthComponents';
+import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import { 
   Play, Settings, CheckCircle2, AlertTriangle, Download, RefreshCw, Search, Bot, 
   Globe, ShieldCheck, Filter, PlusCircle, DollarSign, History, ExternalLink, 
   ShoppingCart, CheckSquare, Square, X, XCircle, LogOut, Smartphone, Shield, 
-  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive, Flame, Sparkles, Server
+  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive, Flame, Sparkles, Server, PieChart as PieChartIcon, BarChart3
 } from 'lucide-react';
 
 const REG_FEES: Record<string, number> = {
@@ -153,6 +154,30 @@ const TrafficForecastSparkline: React.FC<TrafficForecastSparklineProps> = ({ dom
   );
 };
 
+const CustomTrafficTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-slate-950 border border-slate-700 p-3.5 rounded-2xl shadow-2xl text-xs space-y-1.5 z-50">
+        <div className="font-black text-white flex items-center gap-2">
+          <span className="w-3 h-3 rounded-full" style={{ backgroundColor: data.color }}></span>
+          <span>{data.name}</span>
+        </div>
+        <div className="text-slate-300 font-mono">
+          Số lượng: <b className="text-white">{data.value.toLocaleString()} domain</b>
+        </div>
+        <div className="text-slate-300 font-mono">
+          Chiếm tỷ lệ: <b className="text-emerald-400">{data.percentage}%</b>
+        </div>
+        <div className="text-slate-400 text-[10px] pt-1 border-t border-slate-800">
+          Phạm vi: {data.range}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -173,6 +198,7 @@ export default function App() {
   const [showBulkTldModal, setShowBulkTldModal] = useState(false);
   const [bulkTldInput, setBulkTldInput] = useState("");
   const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'has_viewdns_history' | 'duplicate_only'>('all');
+  const [trafficFilter, setTrafficFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all');
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [singleCopiedId, setSingleCopiedId] = useState<string | null>(null);
   const [isLiveChecking, setIsLiveChecking] = useState(false);
@@ -649,21 +675,93 @@ export default function App() {
     return cleanDomainsWithGrowth.filter(d => d.isDuplicate).length;
   }, [cleanDomainsWithGrowth]);
 
+  const trafficDistributionData = useMemo(() => {
+    let lowCount = 0;    // < 1,000
+    let medCount = 0;    // 1,000 - 9,999
+    let highCount = 0;   // >= 10,000
+
+    let totalTrafficSum = 0;
+    let maxTrafficVal = 0;
+
+    cleanDomainsWithGrowth.forEach(d => {
+      const t = d.traffic || 0;
+      totalTrafficSum += t;
+      if (t > maxTrafficVal) maxTrafficVal = t;
+
+      if (t < 1000) {
+        lowCount++;
+      } else if (t < 10000) {
+        medCount++;
+      } else {
+        highCount++;
+      }
+    });
+
+    const total = cleanDomainsWithGrowth.length || 1;
+
+    const chartData = [
+      {
+        name: 'Thấp (Low)',
+        range: '< 1,000 visitors/tháng',
+        value: lowCount,
+        percentage: ((lowCount / total) * 100).toFixed(1),
+        color: '#3b82f6',
+        badgeBg: 'bg-blue-950/80 text-blue-300 border-blue-800',
+      },
+      {
+        name: 'Trung Bình (Medium)',
+        range: '1,000 - 9,999 visitors/tháng',
+        value: medCount,
+        percentage: ((medCount / total) * 100).toFixed(1),
+        color: '#10b981',
+        badgeBg: 'bg-emerald-950/80 text-emerald-300 border-emerald-800',
+      },
+      {
+        name: 'Cao (High)',
+        range: '≥ 10,000 visitors/tháng',
+        value: highCount,
+        percentage: ((highCount / total) * 100).toFixed(1),
+        color: '#f59e0b',
+        badgeBg: 'bg-amber-950/80 text-amber-300 border-amber-800',
+      },
+    ];
+
+    const avgTrafficVal = Math.round(totalTrafficSum / (cleanDomainsWithGrowth.length || 1));
+
+    return {
+      chartData,
+      totalClean: cleanDomainsWithGrowth.length,
+      totalTrafficSum,
+      maxTrafficVal,
+      avgTrafficVal,
+      lowCount,
+      medCount,
+      highCount,
+    };
+  }, [cleanDomainsWithGrowth]);
+
   const displayedDomains = useMemo(() => {
+    let list = cleanDomainsWithGrowth;
     if (filterMode === 'high_potential') {
-      return cleanDomainsWithGrowth.filter(d => d.isHighPotential);
+      list = list.filter(d => d.isHighPotential);
+    } else if (filterMode === 'available_only') {
+      list = list.filter(d => d.liveAvailability === 'available');
+    } else if (filterMode === 'has_viewdns_history') {
+      list = list.filter(d => d.viewDnsStatus === 'has_history');
+    } else if (filterMode === 'duplicate_only') {
+      list = list.filter(d => d.isDuplicate);
     }
-    if (filterMode === 'available_only') {
-      return cleanDomainsWithGrowth.filter(d => d.liveAvailability === 'available');
+
+    if (trafficFilter === 'low') {
+      list = list.filter(d => (d.traffic || 0) < 1000);
+    } else if (trafficFilter === 'medium') {
+      list = list.filter(d => (d.traffic || 0) >= 1000 && (d.traffic || 0) < 10000);
+    } else if (trafficFilter === 'high') {
+      list = list.filter(d => (d.traffic || 0) >= 10000);
     }
-    if (filterMode === 'has_viewdns_history') {
-      return cleanDomainsWithGrowth.filter(d => d.viewDnsStatus === 'has_history');
-    }
-    if (filterMode === 'duplicate_only') {
-      return cleanDomainsWithGrowth.filter(d => d.isDuplicate);
-    }
-    return cleanDomainsWithGrowth;
-  }, [cleanDomainsWithGrowth, filterMode]);
+
+    return list;
+  }, [cleanDomainsWithGrowth, filterMode, trafficFilter]);
   
   const copySelectedDomains = async () => {
     const targetDomains = selectedIds.size > 0 
@@ -901,19 +999,15 @@ export default function App() {
         console.warn('ViewDNS proxy fetch failed:', proxyErr);
       }
 
-      // If proxy wasn't able to fetch (network failure) and domain is a subdomain (>2 dots), ViewDNS doesn't support subdomains
+      // If proxy fetch failed or produced no result, report accurately as no history
       if (!fetched) {
+        hasHistory = false;
+        recordCount = 0;
         const parts = target.url.split('.');
         if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => target.url.endsWith(suffix))) {
-          hasHistory = false;
           msg = '🔴 ViewDNS: Không hỗ trợ subdomain';
-        } else if (target.archiveSnapshots > 2 && target.dr > 0) {
-          hasHistory = true;
-          recordCount = Math.max(1, Math.min(8, Math.floor(target.archiveSnapshots / 2)));
-          msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
         } else {
-          hasHistory = false;
-          msg = '🔴 ViewDNS: Không tìm thấy lịch sử IP';
+          msg = '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP';
         }
       }
 
@@ -991,13 +1085,13 @@ export default function App() {
       }
 
       if (!fetched) {
+        hasHistory = false;
+        recordCount = 0;
         const parts = target.url.split('.');
         if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => target.url.endsWith(suffix))) {
-          hasHistory = false;
-        } else if (target.archiveSnapshots > 2 && target.dr > 0) {
-          hasHistory = true;
-          recordCount = Math.max(1, Math.min(8, Math.floor(target.archiveSnapshots / 2)));
-          msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
+          msg = '🔴 ViewDNS: Không hỗ trợ subdomain';
+        } else {
+          msg = '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP';
         }
       }
 
@@ -1090,7 +1184,7 @@ export default function App() {
   };
 
   const exportToCSV = () => {
-    const headers = ["Domain", "DR", "TF", "Current Traffic", "Projected M6 Traffic", "Price", "Marketplace", "Status", "Growth Score", "High Potential", "Reasons"];
+    const headers = ["Domain", "DR", "RD", "TF", "Current Traffic", "Projected M6 Traffic", "Price", "SEO Difficulty Score", "SEO Difficulty Level", "Keyword Density (%)", "Marketplace", "Status", "Growth Score", "High Potential", "Reasons"];
     const rows = displayedDomains.map(d => {
       const currentTraffic = d.traffic || 0;
       const dr = d.dr || 0;
@@ -1099,14 +1193,19 @@ export default function App() {
       const baseVal = Math.max(currentTraffic, Math.round((dr * 12 + rd * 3 + score * 4)));
       const growthRate = 0.08 + (score / 100) * 0.18 + (dr > 30 ? 0.08 : dr > 15 ? 0.04 : 0.01);
       const projectedM6 = Math.round(baseVal * (1 + growthRate * 4.0));
+      const seoDiff = calculateSEODifficulty(d);
 
       return [
         d.url, 
         d.dr, 
+        d.rd,
         d.tf, 
         d.traffic, 
         projectedM6,
         d.price, 
+        seoDiff.score,
+        seoDiff.level,
+        `${seoDiff.keywordDensity}%`,
         d.marketplace, 
         d.isAuction ? 'Auction' : 'Registry',
         d.growthPotentialScore || 0,
@@ -1506,12 +1605,205 @@ export default function App() {
                 </div>
             </div>
 
+            {/* NEW SECTION: Traffic Volume Distribution Recharts Pie Chart */}
+            <div className="mb-10 bg-slate-900/80 border border-slate-800 p-6 md:p-8 rounded-[2.5rem] backdrop-blur-xl shadow-2xl">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 border-b border-slate-800/80 pb-6">
+                <div>
+                  <h3 className="text-2xl font-black text-white tracking-tight flex items-center gap-3">
+                    <PieChartIcon className="text-emerald-400" size={24} />
+                    <span>Phân Phối Lưu Lượng Traffic (Traffic Volume Distribution)</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs font-medium mt-1">
+                    Trực quan hóa cơ cấu phân bổ lưu lượng truy cập hàng tháng (Thấp, Trung Bình, Cao) trên toàn bộ {trafficDistributionData.totalClean.toLocaleString()} domain sạch
+                  </p>
+                </div>
+
+                {/* Filter buttons by Traffic volume */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mr-1">Lọc theo Traffic:</span>
+                  <button
+                    onClick={() => setTrafficFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all border ${
+                      trafficFilter === 'all'
+                        ? 'bg-slate-700 text-white border-slate-500 shadow-md'
+                        : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    Tất cả ({trafficDistributionData.totalClean})
+                  </button>
+                  <button
+                    onClick={() => setTrafficFilter(trafficFilter === 'low' ? 'all' : 'low')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 border ${
+                      trafficFilter === 'low'
+                        ? 'bg-blue-600 text-white border-blue-400 shadow-lg shadow-blue-900/50 scale-105'
+                        : 'bg-blue-950/40 text-blue-300 border-blue-800/60 hover:bg-blue-900/50'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                    <span>Thấp ({trafficDistributionData.lowCount})</span>
+                  </button>
+                  <button
+                    onClick={() => setTrafficFilter(trafficFilter === 'medium' ? 'all' : 'medium')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 border ${
+                      trafficFilter === 'medium'
+                        ? 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-900/50 scale-105'
+                        : 'bg-emerald-950/40 text-emerald-300 border-emerald-800/60 hover:bg-emerald-900/50'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span>Trung bình ({trafficDistributionData.medCount})</span>
+                  </button>
+                  <button
+                    onClick={() => setTrafficFilter(trafficFilter === 'high' ? 'all' : 'high')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 border ${
+                      trafficFilter === 'high'
+                        ? 'bg-amber-600 text-white border-amber-400 shadow-lg shadow-amber-900/50 scale-105'
+                        : 'bg-amber-950/40 text-amber-300 border-amber-800/60 hover:bg-amber-900/50'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                    <span>Cao ({trafficDistributionData.highCount})</span>
+                  </button>
+                </div>
+              </div>
+
+              {trafficDistributionData.totalClean === 0 ? (
+                <div className="py-12 text-center text-slate-500 font-bold">
+                  Chưa có dữ liệu domain sạch để hiển thị biểu đồ phân bổ.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                  {/* Left: Recharts Pie / Donut Chart */}
+                  <div className="lg:col-span-6 xl:col-span-5 h-[280px] w-full flex items-center justify-center relative">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={trafficDistributionData.chartData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={100}
+                          paddingAngle={5}
+                          dataKey="value"
+                          nameKey="name"
+                          stroke="#0f172a"
+                          strokeWidth={3}
+                          onClick={(data) => {
+                            if (data && data.name) {
+                              if (data.name.includes('Thấp')) setTrafficFilter(trafficFilter === 'low' ? 'all' : 'low');
+                              if (data.name.includes('Trung')) setTrafficFilter(trafficFilter === 'medium' ? 'all' : 'medium');
+                              if (data.name.includes('Cao')) setTrafficFilter(trafficFilter === 'high' ? 'all' : 'high');
+                            }
+                          }}
+                          className="cursor-pointer outline-none"
+                        >
+                          {trafficDistributionData.chartData.map((entry, index) => (
+                            <Cell 
+                              key={`cell-${index}`} 
+                              fill={entry.color} 
+                              opacity={
+                                trafficFilter === 'all' 
+                                  ? 1 
+                                  : (
+                                      (trafficFilter === 'low' && entry.name.includes('Thấp')) ||
+                                      (trafficFilter === 'medium' && entry.name.includes('Trung')) ||
+                                      (trafficFilter === 'high' && entry.name.includes('Cao'))
+                                    ) ? 1 : 0.35
+                              }
+                            />
+                          ))}
+                        </Pie>
+                        <RechartsTooltip content={<CustomTrafficTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+
+                    {/* Donut Center Overlay */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <span className="text-2xl font-black text-white">{trafficDistributionData.totalClean}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Domains</span>
+                    </div>
+                  </div>
+
+                  {/* Right: Category Cards & Metrics */}
+                  <div className="lg:col-span-6 xl:col-span-7 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {trafficDistributionData.chartData.map((cat, idx) => {
+                      const isFilterActive = 
+                        (trafficFilter === 'low' && cat.name.includes('Thấp')) ||
+                        (trafficFilter === 'medium' && cat.name.includes('Trung')) ||
+                        (trafficFilter === 'high' && cat.name.includes('Cao'));
+
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            if (cat.name.includes('Thấp')) setTrafficFilter(trafficFilter === 'low' ? 'all' : 'low');
+                            if (cat.name.includes('Trung')) setTrafficFilter(trafficFilter === 'medium' ? 'all' : 'medium');
+                            if (cat.name.includes('Cao')) setTrafficFilter(trafficFilter === 'high' ? 'all' : 'high');
+                          }}
+                          className={`p-5 rounded-2xl border transition-all cursor-pointer ${
+                            isFilterActive
+                              ? 'bg-slate-950 border-slate-500 shadow-xl scale-[1.02]'
+                              : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-950/90'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${cat.badgeBg}`}>
+                              {cat.name}
+                            </span>
+                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: cat.color }}></span>
+                          </div>
+
+                          <div className="text-2xl font-black text-white font-mono">
+                            {cat.value.toLocaleString()} <span className="text-xs font-normal text-slate-400">domain</span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs text-slate-400 mt-2 pt-2 border-t border-slate-900">
+                            <span>Tỷ lệ:</span>
+                            <b className="text-white font-mono">{cat.percentage}%</b>
+                          </div>
+
+                          <div className="text-[10px] text-slate-500 mt-1 truncate" title={cat.range}>
+                            {cat.range}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Overall Metrics Bar */}
+                    <div className="md:col-span-3 grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+                      <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/80">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">Traffic TB / Domain</span>
+                        <span className="text-base font-black text-emerald-400 font-mono">
+                          ~{trafficDistributionData.avgTrafficVal.toLocaleString()} <span className="text-[10px] text-slate-400 font-sans">/tháng</span>
+                        </span>
+                      </div>
+                      <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/80">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">Traffic Cao Nhất</span>
+                        <span className="text-base font-black text-amber-400 font-mono">
+                          {trafficDistributionData.maxTrafficVal.toLocaleString()} <span className="text-[10px] text-slate-400 font-sans">/tháng</span>
+                        </span>
+                      </div>
+                      <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/80 col-span-2 sm:col-span-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">Tổng Traffic Tích Lũy</span>
+                        <span className="text-base font-black text-blue-400 font-mono">
+                          {trafficDistributionData.totalTrafficSum >= 1000000 
+                            ? `${(trafficDistributionData.totalTrafficSum / 1000000).toFixed(2)}M` 
+                            : `${(trafficDistributionData.totalTrafficSum / 1000).toFixed(1)}k`}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="bg-slate-900 border border-slate-800 rounded-[3rem] overflow-hidden shadow-2xl">
                 <table className="w-full text-left border-separate border-spacing-0">
                     <thead>
                         <tr className="bg-slate-950/90 text-slate-500 uppercase text-[10px] font-black tracking-widest sticky top-0 z-20">
                             <th className="p-6 border-b border-slate-800 w-10 text-center"><input type="checkbox" checked={selectedIds.size === displayedDomains.length && displayedDomains.length > 0} onChange={() => setSelectedIds(new Set(selectedIds.size === displayedDomains.length ? [] : displayedDomains.map(d => d.id)))} className="accent-blue-500 w-5 h-5 cursor-pointer rounded"/></th>
                             <th className="p-6 border-b border-slate-800">Domain & SEO Metrics</th>
+                            <th className="p-6 border-b border-slate-800">Độ khó SEO</th>
                             <th className="p-6 border-b border-slate-800">Sàn & Trạng thái</th>
                             <th className="p-6 border-b border-slate-800">Giá ($)</th>
                             <th className="p-6 border-b border-slate-800">Archive Info</th>
@@ -1608,6 +1900,43 @@ export default function App() {
                                         <span className="flex flex-col"><span className="text-slate-600">RD</span><b className="text-blue-400 text-xs">{d.rd}</b></span>
                                         <span className="flex flex-col"><span className="text-slate-600">Traffic</span><b className="text-emerald-400 text-xs">{d.traffic.toLocaleString()}</b></span>
                                     </div>
+                                </td>
+                                <td className="p-6">
+                                    {(() => {
+                                      const seoDiff = calculateSEODifficulty(d);
+                                      return (
+                                        <div className="space-y-1.5 min-w-[140px] max-w-[170px]">
+                                          <div className="flex items-center justify-between">
+                                            <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${seoDiff.badgeBg} ${seoDiff.badgeText} ${seoDiff.badgeBorder}`}>
+                                              {seoDiff.level}
+                                            </span>
+                                            <b className={`font-mono text-xs font-black ${seoDiff.color}`}>
+                                              {seoDiff.score}/100
+                                            </b>
+                                          </div>
+                                          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                                            <div 
+                                              className={`h-full transition-all rounded-full ${
+                                                seoDiff.score <= 25 ? 'bg-emerald-400' :
+                                                seoDiff.score <= 45 ? 'bg-teal-400' :
+                                                seoDiff.score <= 65 ? 'bg-amber-400' :
+                                                seoDiff.score <= 80 ? 'bg-orange-500' : 'bg-rose-500'
+                                              }`} 
+                                              style={{ width: `${seoDiff.score}%` }}
+                                            />
+                                          </div>
+                                          <div className="text-[9px] text-slate-400 flex items-center justify-between">
+                                            <span>Mật độ từ khóa:</span>
+                                            <b className="text-slate-200 font-mono">{seoDiff.keywordDensity}%</b>
+                                          </div>
+                                          {seoDiff.reasons.length > 0 && (
+                                            <div className="text-[8px] text-slate-400 italic truncate" title={seoDiff.reasons.join(' • ')}>
+                                              💡 {seoDiff.reasons[0]}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
                                 </td>
                                 <td className="p-6">
                                     <div className="flex flex-col gap-1">
