@@ -890,14 +890,29 @@ export default function App() {
   };
 
   const batchLiveCheckAvailability = async () => {
-    const targets = selectedIds.size > 0 
-      ? displayedDomains.filter(d => selectedIds.has(d.id))
-      : displayedDomains.slice(0, 30);
+    const sourcePool = selectedIds.size > 0 
+      ? cleanDomainsWithGrowth.filter(d => selectedIds.has(d.id))
+      : cleanDomainsWithGrowth;
 
-    if (targets.length === 0) return;
+    if (sourcePool.length === 0) return;
+
+    // Filter out domains that have already been scanned
+    const targets = sourcePool.filter(d => !d.liveAvailability || d.liveAvailability === 'unknown');
+    const alreadyScannedCount = sourcePool.length - targets.length;
+
+    if (targets.length === 0) {
+      addLog(`ℹ️ Tất cả ${sourcePool.length} domain đang có đã được quét Live DNS trước đó.`);
+      setCopyToast(`ℹ️ Tất cả ${sourcePool.length} domain đã được quét Live DNS trước đó!`);
+      setTimeout(() => setCopyToast(null), 3000);
+      return;
+    }
 
     setIsLiveChecking(true);
-    addLog(`🔍 Bắt đầu kiểm tra Live DNS / Trạng thái hết hạn cho ${targets.length} domain...`);
+    if (alreadyScannedCount > 0) {
+      addLog(`🔍 Bắt đầu quét Live DNS cho ${targets.length} domain chưa quét (Đã tự động bỏ qua ${alreadyScannedCount} domain đã quét trước đó trong tổng số ${sourcePool.length} domain)...`);
+    } else {
+      addLog(`🔍 Bắt đầu quét Live DNS cho tất cả ${targets.length} domain...`);
+    }
 
     let availCount = 0;
     for (const target of targets) {
@@ -939,7 +954,7 @@ export default function App() {
     setIsLiveChecking(false);
     if (availCount > 0) {
       setFilterMode('available_only');
-      addLog(`✅ Hoàn tất kiểm tra Live DNS! Phát hiện ${availCount}/${targets.length} domain tự do (NXDOMAIN). Tự do lọc danh sách chỉ hiển thị domain đã hết hạn.`);
+      addLog(`✅ Hoàn tất kiểm tra Live DNS! Phát hiện ${availCount}/${targets.length} domain tự do (NXDOMAIN). Tự động lọc danh sách chỉ hiển thị domain đã hết hạn.`);
       setCopyToast(`🟢 Tự động lọc chỉ hiển thị ${availCount} domain đã hết hạn (Sẵn sàng mua)!`);
     } else {
       addLog(`✅ Hoàn tất kiểm tra Live DNS! Đã kiểm tra xong ${targets.length} domain.`);
@@ -1034,14 +1049,29 @@ export default function App() {
   };
 
   const batchCheckViewDnsHistory = async () => {
-    const targets = selectedIds.size > 0 
-      ? displayedDomains.filter(d => selectedIds.has(d.id))
-      : displayedDomains.slice(0, 30);
+    const sourcePool = selectedIds.size > 0 
+      ? cleanDomainsWithGrowth.filter(d => selectedIds.has(d.id))
+      : cleanDomainsWithGrowth;
 
-    if (targets.length === 0) return;
+    if (sourcePool.length === 0) return;
+
+    // Filter out domains that have already been scanned for ViewDNS
+    const targets = sourcePool.filter(d => !d.viewDnsStatus || d.viewDnsStatus === 'unknown');
+    const alreadyScannedCount = sourcePool.length - targets.length;
+
+    if (targets.length === 0) {
+      addLog(`ℹ️ Tất cả ${sourcePool.length} domain đang có đã được quét ViewDNS trước đó.`);
+      setCopyToast(`ℹ️ Tất cả ${sourcePool.length} domain đã được quét ViewDNS trước đó!`);
+      setTimeout(() => setCopyToast(null), 3000);
+      return;
+    }
 
     setIsViewDnsChecking(true);
-    addLog(`🔎 Bắt đầu tự động kiểm tra lịch sử ViewDNS IP History cho ${targets.length} domain...`);
+    if (alreadyScannedCount > 0) {
+      addLog(`🔎 Bắt đầu quét lịch sử ViewDNS IP History cho ${targets.length} domain chưa quét (Đã tự động bỏ qua ${alreadyScannedCount} domain đã quét trước đó trong tổng số ${sourcePool.length} domain)...`);
+    } else {
+      addLog(`🔎 Bắt đầu tự động kiểm tra lịch sử ViewDNS IP History cho ${targets.length} domain...`);
+    }
 
     let historyCount = 0;
     let excludedCount = 0;
@@ -1559,7 +1589,7 @@ export default function App() {
                       onClick={batchCheckViewDnsHistory} 
                       disabled={isViewDnsChecking || displayedDomains.length === 0} 
                       className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-purple-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                      title="Tự động kiểm tra lịch sử IP trên ViewDNS (ViewDNS.info iphistory) và bắt buộc lọc domain có lịch sử"
+                      title="Tự động quét tất cả domain chưa kiểm tra lịch sử IP ViewDNS (bỏ qua các domain đã được quét)"
                     >
                       {isViewDnsChecking ? <Loader2 size={20} className="animate-spin"/> : <Server size={20}/>}
                       <span>{isViewDnsChecking ? 'Đang check ViewDNS...' : 'Check Lịch Sử ViewDNS'}</span>
@@ -1568,7 +1598,7 @@ export default function App() {
                       onClick={batchLiveCheckAvailability} 
                       disabled={isLiveChecking || displayedDomains.length === 0} 
                       className="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-cyan-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                      title="Kiểm tra trực tiếp bản ghi Live DNS & WHOIS xem tên miền có thực sự hết hạn và tự do mua không"
+                      title="Quét trực tiếp bản ghi Live DNS cho tất cả domain đang có (bỏ qua các domain đã được quét trước đó)"
                     >
                       {isLiveChecking ? <Loader2 size={20} className="animate-spin"/> : <Search size={20}/>}
                       <span>{isLiveChecking ? 'Đang check DNS...' : 'Check Live Hết Hạn'}</span>
