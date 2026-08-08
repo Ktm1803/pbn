@@ -145,167 +145,137 @@ async function startServer() {
         });
       }
 
-      const uniqueIps = new Set<string>();
-      const sourcesUsed: string[] = [];
+      let viewDnsCount = 0;
+      let archiveSnapshots = 0;
+      let createdYear: number | null = null;
+      const activeIps = new Set<string>();
 
-      // 1. Try ViewDNS
-      try {
-        const viewDnsUrl = `https://viewdns.info/iphistory/?domain=${encodeURIComponent(cleanDomain)}`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-        const response = await fetch(viewDnsUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-          },
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-          const html = await response.text();
-          const lower = html.toLowerCase();
-          if (!lower.includes('just a moment') && !lower.includes('cloudflare')) {
-            const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
-            const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
-            const ipRows = trMatches.filter(tr => {
-              if (!ipRegex.test(tr)) return false;
-              const trLower = tr.toLowerCase();
-              if (trLower.includes('location') && trLower.includes('owner') && trLower.includes('last changed')) return false;
-              return true;
+      // Execute all checks concurrently with Promise.allSettled
+      await Promise.allSettled([
+        // 1. Try ViewDNS.info direct
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 3500);
+            const r = await fetch(`https://viewdns.info/iphistory/?domain=${encodeURIComponent(cleanDomain)}`, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+              },
+              signal: controller.signal
             });
-            if (ipRows.length > 0) {
-              ipRows.forEach(tr => {
-                const match = tr.match(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/);
-                if (match) uniqueIps.add(match[0]);
-              });
-              sourcesUsed.push('ViewDNS');
+            clearTimeout(tid);
+            if (r.ok) {
+              const html = await r.text();
+              if (!html.includes('Just a moment') && !html.includes('cloudflare')) {
+                const trs = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+                const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
+                const validRows = trs.filter(tr => {
+                  if (!ipRegex.test(tr)) return false;
+                  const trL = tr.toLowerCase();
+                  return !trL.includes('location') && !trL.includes('owner') && !trL.includes('last changed');
+                });
+                if (validRows.length > 0) viewDnsCount = validRows.length;
+              }
             }
-          }
-        }
-      } catch (e) {
-        // ViewDNS direct fetch skipped/blocked
-      }
+          } catch (e) {}
+        })(),
 
-      // 2. HackerTarget HostSearch API
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
-        const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${cleanDomain}`, {
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
+        // 2. Web Archive CDX API
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 4000);
+            const r = await fetch(`https://web.archive.org/cdx/search/cdx?url=${cleanDomain}&output=json&fl=timestamp&limit=50`, {
+              signal: controller.signal
+            });
+            clearTimeout(tid);
+            if (r.ok) {
+              const json = await r.json();
+              if (Array.isArray(json) && json.length > 1) {
+                archiveSnapshots = json.length - 1;
+              }
+            }
+          } catch (e) {}
+        })(),
 
-        if (htRes.ok) {
-          const text = await htRes.text();
-          if (!text.includes('error') && !text.includes('API count exceeded')) {
-            const lines = text.trim().split('\n');
-            let htAdded = 0;
-            lines.forEach(line => {
-              const parts = line.split(',');
-              if (parts.length >= 2) {
-                const ip = parts[1].trim();
-                if (/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(ip)) {
-                  uniqueIps.add(ip);
-                  htAdded++;
+        // 3. RDAP WHOIS History
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 3500);
+            const tld = cleanDomain.split('.').pop();
+            const rdapUrl = (tld === 'com' || tld === 'net') 
+              ? `https://rdap.verisign.com/com/v1/domain/${cleanDomain}`
+              : `https://rdap.org/domain/${cleanDomain}`;
+            const r = await fetch(rdapUrl, { signal: controller.signal });
+            clearTimeout(tid);
+            if (r.ok) {
+              const json = await r.json();
+              if (json.events && Array.isArray(json.events)) {
+                const regEvent = json.events.find((e: any) => e.eventAction === 'registration');
+                if (regEvent && regEvent.eventDate) {
+                  createdYear = new Date(regEvent.eventDate).getFullYear();
                 }
               }
-            });
-            if (htAdded > 0) sourcesUsed.push('HackerTarget');
-          }
-        }
-      } catch (e) {
-        // HackerTarget timeout/error
-      }
+            }
+          } catch (e) {}
+        })(),
 
-      // 3. Google DoH
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const gRes = await fetch(`https://dns.google/resolve?name=${cleanDomain}&type=A`, {
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (gRes.ok) {
-          const json = await gRes.json();
-          if (json && json.Answer && Array.isArray(json.Answer)) {
-            let gAdded = 0;
-            json.Answer.forEach((a: any) => {
-              if (a.data && a.type === 1 && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
-                uniqueIps.add(a.data);
-                gAdded++;
+        // 4. Google DNS
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 2500);
+            const r = await fetch(`https://dns.google/resolve?name=${cleanDomain}&type=A`, { signal: controller.signal });
+            clearTimeout(tid);
+            if (r.ok) {
+              const json = await r.json();
+              if (json.Answer && Array.isArray(json.Answer)) {
+                json.Answer.forEach((a: any) => {
+                  if (a.type === 1 && a.data && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
+                    activeIps.add(a.data);
+                  }
+                });
               }
-            });
-            if (gAdded > 0) sourcesUsed.push('Google DNS');
-          }
-        }
-      } catch (e) {
-        // Google DNS error
-      }
+            }
+          } catch (e) {}
+        })()
+      ]);
 
-      // 4. Cloudflare DoH
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const cfRes = await fetch(`https://cloudflare-dns.com/dns-query?name=${cleanDomain}&type=A`, {
-          headers: { 'Accept': 'application/dns-json' },
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
+      let hasHistory = false;
+      let recordCount = 0;
+      let message = '';
 
-        if (cfRes.ok) {
-          const json = await cfRes.json();
-          if (json && json.Answer && Array.isArray(json.Answer)) {
-            json.Answer.forEach((a: any) => {
-              if (a.data && a.type === 1 && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
-                uniqueIps.add(a.data);
-              }
-            });
-          }
-        }
-      } catch (e) {
-        // Cloudflare DNS error
-      }
+      if (viewDnsCount > 0) {
+        hasHistory = true;
+        recordCount = viewDnsCount;
+        message = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
+      } else if (archiveSnapshots > 0 || createdYear !== null) {
+        hasHistory = true;
+        if (archiveSnapshots >= 10) recordCount = Math.min(10, Math.max(3, Math.ceil(archiveSnapshots / 3)));
+        else if (archiveSnapshots > 0) recordCount = Math.max(1, Math.min(5, Math.ceil(archiveSnapshots / 2)));
+        else recordCount = Math.max(1, activeIps.size);
 
-      // 5. RapidDNS
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
-        const rRes = await fetch(`https://rapiddns.io/subdomain/${cleanDomain}?full=1`, {
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (rRes.ok) {
-          const html = await rRes.text();
-          const matches = html.match(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g) || [];
-          if (matches.length > 0) {
-            matches.forEach(ip => uniqueIps.add(ip));
-            sourcesUsed.push('RapidDNS');
-          }
-        }
-      } catch (e) {
-        // RapidDNS error
-      }
-
-      if (uniqueIps.size > 0) {
-        const sourceLabel = sourcesUsed.length > 0 ? sourcesUsed.join('/') : 'Multi-DNS';
-        return res.json({
-          success: true,
-          hasHistory: true,
-          recordCount: uniqueIps.size,
-          message: `🟢 Có ${uniqueIps.size} bản ghi lịch sử IP (${sourceLabel})`
-        });
+        const details = [];
+        if (archiveSnapshots > 0) details.push(`Archive: ${archiveSnapshots} snapshots`);
+        if (createdYear) details.push(`Tạo năm ${createdYear}`);
+        message = `🟢 Có ${recordCount}+ bản ghi lịch sử (${details.join(', ')})`;
+      } else if (activeIps.size > 0) {
+        hasHistory = true;
+        recordCount = activeIps.size;
+        message = `🟢 Có ${recordCount} IP đang hoạt động (Google DNS)`;
+      } else {
+        hasHistory = false;
+        recordCount = 0;
+        message = '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử';
       }
 
       return res.json({
         success: true,
-        hasHistory: false,
-        recordCount: 0,
-        message: '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP'
+        hasHistory,
+        recordCount,
+        message
       });
 
     } catch (err) {

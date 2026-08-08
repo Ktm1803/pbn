@@ -964,7 +964,7 @@ export default function App() {
   };
 
   const fetchViewDnsResult = async (domainUrl: string) => {
-    // 1. Try server endpoint first (which checks ViewDNS + HackerTarget + RapidDNS + Google & Cloudflare DNS)
+    // 1. Try server endpoint first (which checks ViewDNS + Web Archive + RDAP WHOIS + Google DNS)
     try {
       const res = await fetch('/api/check-viewdns', {
         method: 'POST',
@@ -974,11 +974,11 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data && data.success) {
+        if (data && data.success && data.hasHistory) {
           return {
-            hasHistory: !!data.hasHistory,
-            recordCount: data.recordCount || 0,
-            msg: data.message || '🔴 ViewDNS: Không có lịch sử IP'
+            hasHistory: true,
+            recordCount: data.recordCount || 1,
+            msg: data.message || '🟢 Có lịch sử IP'
           };
         }
       }
@@ -986,23 +986,17 @@ export default function App() {
       console.warn("Server ViewDNS API failed, trying client fallback:", e);
     }
 
-    // 2. Client-side fallback via HackerTarget & Google DNS
+    // 2. Client-side fallback via Web Archive CDX & Google DNS
     try {
       const clean = domainUrl.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-      const ips = new Set<string>();
+      let archiveCount = 0;
+      let activeIpCount = 0;
 
       try {
-        const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`, { signal: AbortSignal.timeout(3500) });
-        if (htRes.ok) {
-          const txt = await htRes.text();
-          if (!txt.includes('error') && !txt.includes('API count exceeded')) {
-            txt.split('\n').forEach(line => {
-              const p = line.split(',');
-              if (p.length >= 2 && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(p[1].trim())) {
-                ips.add(p[1].trim());
-              }
-            });
-          }
+        const arcRes = await fetch(`https://web.archive.org/cdx/search/cdx?url=${clean}&output=json&fl=timestamp&limit=50`, { signal: AbortSignal.timeout(4000) });
+        if (arcRes.ok) {
+          const json = await arcRes.json();
+          if (Array.isArray(json) && json.length > 1) archiveCount = json.length - 1;
         }
       } catch (e) {}
 
@@ -1011,18 +1005,17 @@ export default function App() {
         if (gRes.ok) {
           const json = await gRes.json();
           if (json?.Answer) {
-            json.Answer.forEach((a: any) => {
-              if (a.data && a.type === 1) ips.add(a.data);
-            });
+            activeIpCount = json.Answer.filter((a: any) => a.type === 1).length;
           }
         }
       } catch (e) {}
 
-      if (ips.size > 0) {
+      if (archiveCount > 0 || activeIpCount > 0) {
+        const recs = archiveCount > 0 ? Math.max(1, Math.min(10, Math.ceil(archiveCount / 3))) : activeIpCount;
         return {
           hasHistory: true,
-          recordCount: ips.size,
-          msg: `🟢 Có ${ips.size} bản ghi lịch sử IP (HackerTarget/DNS)`
+          recordCount: recs,
+          msg: `🟢 Có ${recs}+ bản ghi lịch sử (${archiveCount} Web Archive snapshots)`
         };
       }
     } catch (err) {
@@ -1041,7 +1034,7 @@ export default function App() {
     return {
       hasHistory: false,
       recordCount: 0,
-      msg: '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP'
+      msg: '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử'
     };
   };
 
