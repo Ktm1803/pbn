@@ -127,6 +127,101 @@ async function startServer() {
     }
   });
 
+  app.post("/api/check-viewdns", async (req, res) => {
+    try {
+      const { domain } = req.body;
+      if (!domain) {
+        return res.json({ success: false, message: "Missing domain" });
+      }
+
+      const cleanDomain = domain.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const parts = cleanDomain.split('.');
+      if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => cleanDomain.endsWith(suffix))) {
+        return res.json({
+          success: true,
+          hasHistory: false,
+          recordCount: 0,
+          message: '🔴 ViewDNS: Không hỗ trợ subdomain'
+        });
+      }
+
+      const viewDnsUrl = `https://viewdns.info/iphistory/?domain=${encodeURIComponent(cleanDomain)}`;
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      const response = await fetch(viewDnsUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const html = await response.text();
+        const lower = html.toLowerCase();
+
+        if (
+          lower.includes('do not have any records') || 
+          lower.includes('no records found') || 
+          lower.includes('no ip history found') ||
+          lower.includes('only tracks top level domains') ||
+          lower.includes('select a different hostname')
+        ) {
+          return res.json({
+            success: true,
+            hasHistory: false,
+            recordCount: 0,
+            message: '🔴 ViewDNS: Không có dữ liệu lịch sử IP'
+          });
+        }
+
+        const trMatches = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+        const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
+
+        const ipRows = trMatches.filter(tr => {
+          if (!ipRegex.test(tr)) return false;
+          const trLower = tr.toLowerCase();
+          if (trLower.includes('location') && trLower.includes('owner') && trLower.includes('last changed')) return false;
+          return true;
+        });
+
+        if (ipRows.length > 0) {
+          return res.json({
+            success: true,
+            hasHistory: true,
+            recordCount: ipRows.length,
+            message: `🟢 Có ${ipRows.length} bản ghi lịch sử IP trên ViewDNS`
+          });
+        }
+
+        return res.json({
+          success: true,
+          hasHistory: false,
+          recordCount: 0,
+          message: '🔴 ViewDNS: Không tìm thấy lịch sử IP'
+        });
+      } else {
+        return res.json({
+          success: true,
+          hasHistory: false,
+          recordCount: 0,
+          message: `🔴 ViewDNS: Lỗi HTTP ${response.status}`
+        });
+      }
+    } catch (err) {
+      return res.json({
+        success: true,
+        hasHistory: false,
+        recordCount: 0,
+        message: "🔴 ViewDNS: Không kết nối được tới ViewDNS"
+      });
+    }
+  });
+
   app.post("/api/generate-email-body", async (req, res) => {
     try {
       const { email } = req.body;

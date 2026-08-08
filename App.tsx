@@ -963,6 +963,87 @@ export default function App() {
     setTimeout(() => setCopyToast(null), 3500);
   };
 
+  const fetchViewDnsResult = async (domainUrl: string) => {
+    // 1. Try server endpoint first
+    try {
+      const res = await fetch('/api/check-viewdns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: domainUrl }),
+        signal: AbortSignal.timeout(6500)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success) {
+          return {
+            hasHistory: !!data.hasHistory,
+            recordCount: data.recordCount || 0,
+            msg: data.message || '🔴 ViewDNS: Không có lịch sử IP'
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("Server ViewDNS API failed, trying proxy fallback:", e);
+    }
+
+    // 2. Client-side fallback via CORS proxy with strict IP row regex matching
+    try {
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://viewdns.info/iphistory/?domain=${domainUrl}`)}`;
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const text = await res.text();
+        const lower = text.toLowerCase();
+
+        if (
+          lower.includes('do not have any records') || 
+          lower.includes('no records') || 
+          lower.includes('only tracks top level domains') ||
+          lower.includes('select a different hostname')
+        ) {
+          return {
+            hasHistory: false,
+            recordCount: 0,
+            msg: '🔴 ViewDNS: Không có lịch sử IP (No records / Subdomain)'
+          };
+        }
+
+        const trMatches = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+        const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
+        const ipRows = trMatches.filter(tr => {
+          if (!ipRegex.test(tr)) return false;
+          const trLower = tr.toLowerCase();
+          if (trLower.includes('location') && trLower.includes('owner') && trLower.includes('last changed')) return false;
+          return true;
+        });
+
+        if (ipRows.length > 0) {
+          return {
+            hasHistory: true,
+            recordCount: ipRows.length,
+            msg: `🟢 Có ${ipRows.length} bản ghi lịch sử IP trên ViewDNS`
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("Proxy fallback failed:", err);
+    }
+
+    const parts = domainUrl.split('.');
+    if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => domainUrl.endsWith(suffix))) {
+      return {
+        hasHistory: false,
+        recordCount: 0,
+        msg: '🔴 ViewDNS: Không hỗ trợ subdomain'
+      };
+    }
+
+    return {
+      hasHistory: false,
+      recordCount: 0,
+      msg: '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP'
+    };
+  };
+
   const checkSingleViewDnsHistory = async (domainId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     const target = domains.find(d => d.id === domainId);
@@ -971,71 +1052,17 @@ export default function App() {
     setDomains(prev => prev.map(d => d.id === domainId ? { ...d, viewDnsStatus: 'checking' } : d));
 
     try {
-      let hasHistory = false;
-      let recordCount = 0;
-      let msg = '🔴 ViewDNS: Không tìm thấy lịch sử IP';
-      let fetched = false;
-
-      // Try proxy fetch to viewdns.info
-      try {
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://viewdns.info/iphistory/?domain=${target.url}`)}`;
-        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(5000) });
-        if (res.ok) {
-          const text = await res.text();
-          const lower = text.toLowerCase();
-          fetched = true;
-
-          // Check if ViewDNS explicitly returns "no records" or "subdomain error"
-          if (
-            lower.includes('do not have any records') || 
-            lower.includes('no records') || 
-            lower.includes('only tracks top level domains') ||
-            lower.includes('select a different hostname')
-          ) {
-            hasHistory = false;
-            recordCount = 0;
-            msg = '🔴 ViewDNS: Không có lịch sử IP (No records / Subdomain)';
-          } else if (lower.includes('ip address') && (lower.includes('location') || lower.includes('owner') || lower.includes('last changed') || lower.includes('date'))) {
-            const matches = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
-            if (matches && matches.length > 2) {
-              recordCount = Math.max(1, matches.length - 2);
-              hasHistory = true;
-              msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
-            } else {
-              hasHistory = false;
-              msg = '🔴 ViewDNS: Bảng IP rỗng';
-            }
-          } else {
-            hasHistory = false;
-            msg = '🔴 ViewDNS: Không có bảng lịch sử IP';
-          }
-        }
-      } catch (proxyErr) {
-        console.warn('ViewDNS proxy fetch failed:', proxyErr);
-      }
-
-      // If proxy fetch failed or produced no result, report accurately as no history
-      if (!fetched) {
-        hasHistory = false;
-        recordCount = 0;
-        const parts = target.url.split('.');
-        if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => target.url.endsWith(suffix))) {
-          msg = '🔴 ViewDNS: Không hỗ trợ subdomain';
-        } else {
-          msg = '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP';
-        }
-      }
-
-      const status = hasHistory ? 'has_history' : 'no_history';
+      const result = await fetchViewDnsResult(target.url);
+      const status = result.hasHistory ? 'has_history' : 'no_history';
 
       setDomains(prev => prev.map(d => d.id === domainId ? {
         ...d,
         viewDnsStatus: status,
-        viewDnsIPCount: recordCount,
-        viewDnsMessage: msg
+        viewDnsIPCount: result.recordCount,
+        viewDnsMessage: result.msg
       } : d));
 
-      setCopyToast(msg);
+      setCopyToast(result.msg);
       setTimeout(() => setCopyToast(null), 3000);
 
     } catch (err) {
@@ -1079,66 +1106,22 @@ export default function App() {
     for (const target of targets) {
       setDomains(prev => prev.map(d => d.id === target.id ? { ...d, viewDnsStatus: 'checking' } : d));
 
-      let hasHistory = false;
-      let recordCount = 0;
-      let msg = '🔴 ViewDNS: Không có lịch sử IP';
-      let fetched = false;
+      const result = await fetchViewDnsResult(target.url);
 
-      try {
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://viewdns.info/iphistory/?domain=${target.url}`)}`;
-        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(4500) });
-        if (res.ok) {
-          const text = await res.text();
-          const lower = text.toLowerCase();
-          fetched = true;
-
-          if (
-            lower.includes('do not have any records') || 
-            lower.includes('no records') || 
-            lower.includes('only tracks top level domains') ||
-            lower.includes('select a different hostname')
-          ) {
-            hasHistory = false;
-            recordCount = 0;
-            msg = '🔴 ViewDNS: Không có lịch sử IP (No records / Subdomain)';
-          } else if (lower.includes('ip address') && (lower.includes('location') || lower.includes('owner') || lower.includes('last changed') || lower.includes('date'))) {
-            const matches = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi);
-            if (matches && matches.length > 2) {
-              recordCount = Math.max(1, matches.length - 2);
-              hasHistory = true;
-              msg = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
-            }
-          }
-        }
-      } catch {
-        // network fallback
-      }
-
-      if (!fetched) {
-        hasHistory = false;
-        recordCount = 0;
-        const parts = target.url.split('.');
-        if (parts.length > 2 && !['com.vn', 'net.vn', 'org.vn', 'edu.vn', 'gov.vn', 'co.uk', 'org.uk', 'com.au'].some(suffix => target.url.endsWith(suffix))) {
-          msg = '🔴 ViewDNS: Không hỗ trợ subdomain';
-        } else {
-          msg = '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử IP';
-        }
-      }
-
-      if (hasHistory) {
+      if (result.hasHistory) {
         historyCount++;
         setDomains(prev => prev.map(d => d.id === target.id ? {
           ...d,
           viewDnsStatus: 'has_history',
-          viewDnsIPCount: recordCount,
-          viewDnsMessage: msg
+          viewDnsIPCount: result.recordCount,
+          viewDnsMessage: result.msg
         } : d));
       } else {
         excludedCount++;
         setDomains(prev => prev.map(d => d.id === target.id ? {
           ...d,
           viewDnsStatus: 'no_history',
-          viewDnsMessage: msg
+          viewDnsMessage: result.msg
         } : d));
       }
 
