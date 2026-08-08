@@ -964,13 +964,13 @@ export default function App() {
   };
 
   const fetchViewDnsResult = async (domainUrl: string) => {
-    // 1. Try server endpoint first
+    // 1. Try server endpoint first (which checks ViewDNS + HackerTarget + RapidDNS + Google & Cloudflare DNS)
     try {
       const res = await fetch('/api/check-viewdns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: domainUrl }),
-        signal: AbortSignal.timeout(6500)
+        signal: AbortSignal.timeout(8000)
       });
       if (res.ok) {
         const data = await res.json();
@@ -983,49 +983,50 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.warn("Server ViewDNS API failed, trying proxy fallback:", e);
+      console.warn("Server ViewDNS API failed, trying client fallback:", e);
     }
 
-    // 2. Client-side fallback via CORS proxy with strict IP row regex matching
+    // 2. Client-side fallback via HackerTarget & Google DNS
     try {
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://viewdns.info/iphistory/?domain=${domainUrl}`)}`;
-      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        const text = await res.text();
-        const lower = text.toLowerCase();
+      const clean = domainUrl.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const ips = new Set<string>();
 
-        if (
-          lower.includes('do not have any records') || 
-          lower.includes('no records') || 
-          lower.includes('only tracks top level domains') ||
-          lower.includes('select a different hostname')
-        ) {
-          return {
-            hasHistory: false,
-            recordCount: 0,
-            msg: '🔴 ViewDNS: Không có lịch sử IP (No records / Subdomain)'
-          };
+      try {
+        const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`, { signal: AbortSignal.timeout(3500) });
+        if (htRes.ok) {
+          const txt = await htRes.text();
+          if (!txt.includes('error') && !txt.includes('API count exceeded')) {
+            txt.split('\n').forEach(line => {
+              const p = line.split(',');
+              if (p.length >= 2 && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(p[1].trim())) {
+                ips.add(p[1].trim());
+              }
+            });
+          }
         }
+      } catch (e) {}
 
-        const trMatches = text.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
-        const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
-        const ipRows = trMatches.filter(tr => {
-          if (!ipRegex.test(tr)) return false;
-          const trLower = tr.toLowerCase();
-          if (trLower.includes('location') && trLower.includes('owner') && trLower.includes('last changed')) return false;
-          return true;
-        });
-
-        if (ipRows.length > 0) {
-          return {
-            hasHistory: true,
-            recordCount: ipRows.length,
-            msg: `🟢 Có ${ipRows.length} bản ghi lịch sử IP trên ViewDNS`
-          };
+      try {
+        const gRes = await fetch(`https://dns.google/resolve?name=${clean}&type=A`, { signal: AbortSignal.timeout(3000) });
+        if (gRes.ok) {
+          const json = await gRes.json();
+          if (json?.Answer) {
+            json.Answer.forEach((a: any) => {
+              if (a.data && a.type === 1) ips.add(a.data);
+            });
+          }
         }
+      } catch (e) {}
+
+      if (ips.size > 0) {
+        return {
+          hasHistory: true,
+          recordCount: ips.size,
+          msg: `🟢 Có ${ips.size} bản ghi lịch sử IP (HackerTarget/DNS)`
+        };
       }
     } catch (err) {
-      console.warn("Proxy fallback failed:", err);
+      console.warn("Client DNS fallback failed:", err);
     }
 
     const parts = domainUrl.split('.');
@@ -1894,9 +1895,20 @@ export default function App() {
                                           <Server size={11} className="text-purple-400"/> ViewDNS ({d.viewDnsIPCount || 1}+ IP History)
                                         </a>
                                       ) : d.viewDnsStatus === 'no_history' ? (
-                                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-red-950/80 text-red-300 border border-red-800 flex items-center gap-1" title={d.viewDnsMessage}>
-                                          <XCircle size={11} className="text-red-400"/> ViewDNS: Không có lịch sử
-                                        </span>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-red-950/80 text-red-300 border border-red-800 flex items-center gap-1" title={d.viewDnsMessage}>
+                                            <XCircle size={11} className="text-red-400"/> ViewDNS: 0 IP
+                                          </span>
+                                          <a 
+                                            href={`https://viewdns.info/iphistory/?domain=${d.url}`} 
+                                            target="_blank" 
+                                            rel="noreferrer" 
+                                            className="text-[9px] font-bold text-slate-400 hover:text-purple-300 underline flex items-center" 
+                                            title="Mở trực tiếp trang ViewDNS.info trên trình duyệt"
+                                          >
+                                            ViewDNS ↗
+                                          </a>
+                                        </div>
                                       ) : (
                                         <button 
                                           onClick={(e) => checkSingleViewDnsHistory(d.id, e)}
