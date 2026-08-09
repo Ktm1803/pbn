@@ -288,6 +288,104 @@ async function startServer() {
     }
   });
 
+  app.post("/api/check-live", async (req, res) => {
+    try {
+      const { domain } = req.body;
+      if (!domain) {
+        return res.status(400).json({ error: "Missing domain" });
+      }
+
+      const cleanDomain = domain.toLowerCase().trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+
+      let rdapStatus: 'not_found' | 'registered' | 'unknown' = 'unknown';
+      let dnsStatus: 'active' | 'nxdomain' | 'no_answer' | 'unknown' = 'unknown';
+      let activeIps: string[] = [];
+
+      await Promise.allSettled([
+        // 1. RDAP lookup
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 3500);
+            const tld = cleanDomain.split('.').pop();
+            const rdapUrl = (tld === 'com' || tld === 'net')
+              ? `https://rdap.verisign.com/com/v1/domain/${cleanDomain}`
+              : `https://rdap.org/domain/${cleanDomain}`;
+            const r = await fetch(rdapUrl, { signal: controller.signal });
+            clearTimeout(tid);
+            if (r.status === 404) {
+              rdapStatus = 'not_found';
+            } else if (r.ok) {
+              rdapStatus = 'registered';
+            }
+          } catch (e) {}
+        })(),
+
+        // 2. Google DNS DoH lookup
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 3000);
+            const r = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(cleanDomain)}&type=A`, { signal: controller.signal });
+            clearTimeout(tid);
+            if (r.ok) {
+              const json = await r.json();
+              if (json.Status === 3 || json.Status === 2) {
+                dnsStatus = 'nxdomain';
+              } else if (json.Answer && Array.isArray(json.Answer) && json.Answer.length > 0) {
+                const ips = json.Answer.filter((a: any) => a.type === 1).map((a: any) => a.data);
+                if (ips.length > 0) {
+                  dnsStatus = 'active';
+                  activeIps = ips;
+                } else {
+                  dnsStatus = 'no_answer';
+                }
+              } else {
+                dnsStatus = 'no_answer';
+              }
+            }
+          } catch (e) {}
+        })()
+      ]);
+
+      let liveAvailability: 'available' | 'registered_active' | 'unknown' = 'unknown';
+      let dnsStatusMessage = '';
+
+      if (rdapStatus === 'not_found') {
+        liveAvailability = 'available';
+        dnsStatusMessage = '🟢 Tự do đăng ký (WHOIS/RDAP không tồn tại)';
+      } else if (dnsStatus === 'active') {
+        liveAvailability = 'registered_active';
+        dnsStatusMessage = `🔴 Active DNS (${activeIps.slice(0, 2).join(', ')}): Tên miền đang hoạt động`;
+      } else if (dnsStatus === 'nxdomain' || dnsStatus === 'no_answer') {
+        liveAvailability = 'available';
+        dnsStatusMessage = '🟢 Đã hết hạn / NXDOMAIN (Không có bản ghi DNS active)';
+      } else {
+        liveAvailability = 'available';
+        dnsStatusMessage = '🟢 Khả năng cao đã hết hạn / Sẵn sàng mua';
+      }
+
+      return res.json({
+        success: true,
+        domain: cleanDomain,
+        liveAvailability,
+        dnsStatusMessage,
+        details: {
+          rdapStatus,
+          dnsStatus,
+          activeIps
+        }
+      });
+
+    } catch (err) {
+      return res.json({
+        success: true,
+        liveAvailability: 'unknown',
+        dnsStatusMessage: '⚪ Cần kiểm tra trực tiếp qua Registrar'
+      });
+    }
+  });
+
   app.post("/api/generate-email-body", async (req, res) => {
     try {
       const { email } = req.body;

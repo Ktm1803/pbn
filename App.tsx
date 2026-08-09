@@ -199,6 +199,10 @@ export default function App() {
   const [bulkTldInput, setBulkTldInput] = useState("");
   const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'has_viewdns_history' | 'duplicate_only'>('all');
   const [trafficFilter, setTrafficFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all');
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTldFilter, setSelectedTldFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<'dr_desc' | 'tf_desc' | 'price_asc' | 'traffic_desc' | 'growth_desc' | 'url_asc'>('growth_desc');
+  const [showTrafficChart, setShowTrafficChart] = useState(false);
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [singleCopiedId, setSingleCopiedId] = useState<string | null>(null);
   const [isLiveChecking, setIsLiveChecking] = useState(false);
@@ -742,6 +746,7 @@ export default function App() {
 
   const displayedDomains = useMemo(() => {
     let list = cleanDomainsWithGrowth;
+
     if (filterMode === 'high_potential') {
       list = list.filter(d => d.isHighPotential);
     } else if (filterMode === 'available_only') {
@@ -760,8 +765,32 @@ export default function App() {
       list = list.filter(d => (d.traffic || 0) >= 10000);
     }
 
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(d => d.url.toLowerCase().includes(q) || (d.marketplace && d.marketplace.toLowerCase().includes(q)));
+    }
+
+    if (selectedTldFilter !== 'all') {
+      list = list.filter(d => d.url.toLowerCase().endsWith(selectedTldFilter.toLowerCase()));
+    }
+
+    // Sorting
+    list = [...list].sort((a, b) => {
+      if (sortBy === 'dr_desc') return b.dr - a.dr;
+      if (sortBy === 'tf_desc') return b.tf - a.tf;
+      if (sortBy === 'price_asc') return a.price - b.price;
+      if (sortBy === 'traffic_desc') return (b.traffic || 0) - (a.traffic || 0);
+      if (sortBy === 'growth_desc') {
+        const scoreA = (a.growthPotential?.score || 0);
+        const scoreB = (b.growthPotential?.score || 0);
+        return scoreB - scoreA;
+      }
+      if (sortBy === 'url_asc') return a.url.localeCompare(b.url);
+      return 0;
+    });
+
     return list;
-  }, [cleanDomainsWithGrowth, filterMode, trafficFilter]);
+  }, [cleanDomainsWithGrowth, filterMode, trafficFilter, searchQuery, selectedTldFilter, sortBy]);
   
   const copySelectedDomains = async () => {
     const targetDomains = selectedIds.size > 0 
@@ -840,6 +869,40 @@ export default function App() {
     setDomains(prev => prev.map(d => d.id === domainId ? { ...d, liveAvailability: 'checking' } : d));
 
     try {
+      // 1. Try server endpoint first (RDAP WHOIS + Google DNS)
+      const res = await fetch('/api/check-live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: target.url })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success) {
+          const avail = data.liveAvailability || 'available';
+          const msg = data.dnsStatusMessage || '🟢 Đã hết hạn (Sẵn sàng mua)';
+          
+          setDomains(prev => prev.map(d => d.id === domainId ? {
+            ...d,
+            liveAvailability: avail,
+            dnsStatusMessage: msg
+          } : d));
+
+          if (avail === 'available') {
+            setCopyToast(`✅ "${target.url}": Đã hết hạn, sẵn sàng mua!`);
+          } else if (avail === 'registered_active') {
+            setCopyToast(`⚠️ "${target.url}": Đang có DNS active.`);
+          }
+          setTimeout(() => setCopyToast(null), 3000);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Server check-live endpoint failed, falling back to client DoH:", e);
+    }
+
+    // 2. Fallback to direct client-side Google DoH query
+    try {
       const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, { 
         signal: AbortSignal.timeout(4500) 
       });
@@ -849,19 +912,13 @@ export default function App() {
 
       if (dnsRes.ok) {
         const dnsData = await dnsRes.json();
-        if (dnsData.Status === 3) {
+        if (dnsData.Status === 3 || dnsData.Status === 2 || !dnsData.Answer) {
           avail = 'available';
-          msg = '🟢 DNS NXDOMAIN: Không có bản ghi A/DNS (Đã hết hạn & Tự do đăng ký)';
-        } else if (dnsData.Status === 0 && dnsData.Answer && dnsData.Answer.length > 0) {
+          msg = '🟢 DNS NXDOMAIN: Không có bản ghi A/DNS (Tự do đăng ký)';
+        } else if (dnsData.Answer && dnsData.Answer.length > 0) {
           const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
           avail = 'registered_active';
-          msg = `🔴 Active DNS (${ips}): Tên miền đang có IP hoạt động`;
-        } else if (dnsData.Status === 2) {
-          avail = 'available';
-          msg = '🟢 DNS SERVFAIL: Máy chủ tên miền không hoạt động (Hết hạn)';
-        } else {
-          avail = 'available';
-          msg = '🟢 Không tìm thấy DNS active (Khả năng cao tự do)';
+          msg = `🔴 Active DNS (${ips}): Tên miền đang hoạt động`;
         }
       }
 
@@ -874,11 +931,7 @@ export default function App() {
       if (avail === 'available') {
         setCopyToast(`✅ "${target.url}": Đã hết hạn, sẵn sàng mua!`);
         setTimeout(() => setCopyToast(null), 3000);
-      } else if (avail === 'registered_active') {
-        setCopyToast(`⚠️ "${target.url}": Đang có DNS active.`);
-        setTimeout(() => setCopyToast(null), 3000);
       }
-
     } catch (err) {
       console.warn(err);
       setDomains(prev => prev.map(d => d.id === domainId ? {
@@ -909,55 +962,88 @@ export default function App() {
 
     setIsLiveChecking(true);
     if (alreadyScannedCount > 0) {
-      addLog(`🔍 Bắt đầu quét Live DNS cho ${targets.length} domain chưa quét (Đã tự động bỏ qua ${alreadyScannedCount} domain đã quét trước đó trong tổng số ${sourcePool.length} domain)...`);
+      addLog(`🔍 Bắt đầu quét Live WHOIS/DNS cho ${targets.length} domain chưa quét (Bỏ qua ${alreadyScannedCount} domain đã quét)...`);
     } else {
-      addLog(`🔍 Bắt đầu quét Live DNS cho tất cả ${targets.length} domain...`);
+      addLog(`🔍 Bắt đầu quét Live WHOIS/DNS cho tất cả ${targets.length} domain...`);
     }
 
     let availCount = 0;
-    for (const target of targets) {
-      setDomains(prev => prev.map(d => d.id === target.id ? { ...d, liveAvailability: 'checking' } : d));
-      
-      try {
-        const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, { 
-          signal: AbortSignal.timeout(3500) 
-        });
-        if (dnsRes.ok) {
-          const dnsData = await dnsRes.json();
-          if (dnsData.Status === 3 || dnsData.Status === 2 || !dnsData.Answer) {
-            availCount++;
-            setDomains(prev => prev.map(d => d.id === target.id ? {
-              ...d,
-              liveAvailability: 'available',
-              dnsStatusMessage: '🟢 DNS NXDOMAIN: Tự do / Đã hết hạn'
-            } : d));
-          } else {
-            const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
-            setDomains(prev => prev.map(d => d.id === target.id ? {
-              ...d,
-              liveAvailability: 'registered_active',
-              dnsStatusMessage: `🔴 Active DNS (${ips})`
-            } : d));
-          }
-        }
-      } catch {
-        setDomains(prev => prev.map(d => d.id === target.id ? {
-          ...d,
-          liveAvailability: 'unknown',
-          dnsStatusMessage: '⚪ Kiểm tra trực tiếp tại sàn'
-        } : d));
-      }
+    const chunkSize = 4; // 4 concurrent checks
 
-      await new Promise(r => setTimeout(r, 120));
+    for (let i = 0; i < targets.length; i += chunkSize) {
+      const chunk = targets.slice(i, i + chunkSize);
+
+      // Mark checking
+      setDomains(prev => prev.map(d => chunk.some(c => c.id === d.id) ? { ...d, liveAvailability: 'checking' } : d));
+
+      await Promise.all(chunk.map(async (target) => {
+        try {
+          const res = await fetch('/api/check-live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ domain: target.url })
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success) {
+              const avail = data.liveAvailability || 'available';
+              const msg = data.dnsStatusMessage || '🟢 Tự do / Sẵn sàng mua';
+
+              if (avail === 'available') availCount++;
+
+              setDomains(prev => prev.map(d => d.id === target.id ? {
+                ...d,
+                liveAvailability: avail,
+                dnsStatusMessage: msg
+              } : d));
+              return;
+            }
+          }
+        } catch (e) {}
+
+        // Client DoH fallback
+        try {
+          const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, {
+            signal: AbortSignal.timeout(3500)
+          });
+          if (dnsRes.ok) {
+            const dnsData = await dnsRes.json();
+            if (dnsData.Status === 3 || dnsData.Status === 2 || !dnsData.Answer) {
+              availCount++;
+              setDomains(prev => prev.map(d => d.id === target.id ? {
+                ...d,
+                liveAvailability: 'available',
+                dnsStatusMessage: '🟢 DNS NXDOMAIN: Tự do / Đã hết hạn'
+              } : d));
+            } else {
+              const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
+              setDomains(prev => prev.map(d => d.id === target.id ? {
+                ...d,
+                liveAvailability: 'registered_active',
+                dnsStatusMessage: `🔴 Active DNS (${ips})`
+              } : d));
+            }
+          }
+        } catch {
+          setDomains(prev => prev.map(d => d.id === target.id ? {
+            ...d,
+            liveAvailability: 'unknown',
+            dnsStatusMessage: '⚪ Kiểm tra trực tiếp tại sàn'
+          } : d));
+        }
+      }));
+
+      await new Promise(r => setTimeout(r, 100));
     }
 
     setIsLiveChecking(false);
     if (availCount > 0) {
       setFilterMode('available_only');
-      addLog(`✅ Hoàn tất kiểm tra Live DNS! Phát hiện ${availCount}/${targets.length} domain tự do (NXDOMAIN). Tự động lọc danh sách chỉ hiển thị domain đã hết hạn.`);
+      addLog(`✅ Hoàn tất kiểm tra Live Mua! Phát hiện ${availCount}/${targets.length} domain đã hết hạn / tự do. Tự động lọc danh sách chỉ hiển thị domain sẵn sàng mua.`);
       setCopyToast(`🟢 Tự động lọc chỉ hiển thị ${availCount} domain đã hết hạn (Sẵn sàng mua)!`);
     } else {
-      addLog(`✅ Hoàn tất kiểm tra Live DNS! Đã kiểm tra xong ${targets.length} domain.`);
+      addLog(`✅ Hoàn tất kiểm tra Live WHOIS/DNS! Đã kiểm tra xong ${targets.length} domain.`);
       setCopyToast(`✅ Đã kiểm tra xong ${targets.length} domain!`);
     }
     setTimeout(() => setCopyToast(null), 3500);
@@ -1233,17 +1319,17 @@ export default function App() {
     switch (currentStep) {
       case Step.Crawl:
         return (
-          <div className="max-w-3xl mx-auto mt-10 p-10 bg-slate-900 border border-slate-800 rounded-[3rem] shadow-2xl relative overflow-hidden">
-             <h2 className="text-3xl font-black mb-8 flex items-center gap-4 text-white"><Database className="text-blue-500"/> Thu thập PBN</h2>
-             <div className="space-y-8">
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="col-span-2">
+          <div className="max-w-3xl mx-auto my-4 sm:my-10 p-4 sm:p-8 md:p-10 bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl md:rounded-[3rem] shadow-2xl relative overflow-hidden">
+             <h2 className="text-2xl sm:text-3xl font-black mb-6 sm:mb-8 flex items-center gap-3 sm:gap-4 text-white"><Database className="text-blue-500"/> Thu thập PBN</h2>
+             <div className="space-y-6 sm:space-y-8">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                  <div className="sm:col-span-2">
                     <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest">Từ khóa chủ đề</label>
-                    <input type="text" value={seedKeyword} onChange={e => setSeedKeyword(e.target.value)} className="w-full bg-slate-950 p-5 rounded-2xl border border-slate-800 outline-none text-lg font-bold text-white focus:border-blue-500 transition-all shadow-inner" placeholder="VD: marketing, casino, travel..."/>
+                    <input type="text" value={seedKeyword} onChange={e => setSeedKeyword(e.target.value)} className="w-full bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 outline-none text-base sm:text-lg font-bold text-white focus:border-blue-500 transition-all shadow-inner" placeholder="VD: marketing, casino, travel..."/>
                   </div>
                   <div>
                     <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest">Giới hạn quét</label>
-                    <select value={scanLimit} onChange={e => setScanLimit(Number(e.target.value))} className="w-full bg-slate-950 p-5 rounded-2xl border border-slate-800 outline-none font-bold text-white cursor-pointer hover:border-slate-600 transition-colors">
+                    <select value={scanLimit} onChange={e => setScanLimit(Number(e.target.value))} className="w-full bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 outline-none font-bold text-white cursor-pointer hover:border-slate-600 transition-colors">
                       <option value={100}>100 Domain</option>
                       <option value={1000}>1,000 Domain</option>
                       <option value={10000}>10,000 Domain</option>
@@ -1279,7 +1365,7 @@ export default function App() {
                           }
                         }}
                         placeholder=".vn, .jp, .app" 
-                        className="flex-1 bg-slate-950 p-5 rounded-2xl border border-slate-800 outline-none font-bold text-white focus:border-blue-500 transition-all shadow-inner"
+                        className="flex-1 bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 outline-none font-bold text-white focus:border-blue-500 transition-all shadow-inner text-sm"
                       />
                       <button 
                         type="button"
@@ -1292,7 +1378,7 @@ export default function App() {
                             setCustomTld(""); 
                           } 
                         }} 
-                        className="bg-blue-600 p-5 rounded-2xl border border-blue-500 hover:bg-blue-500 hover:scale-105 transition-all text-white flex items-center justify-center"
+                        className="bg-blue-600 p-4 sm:p-5 rounded-2xl border border-blue-500 hover:bg-blue-500 hover:scale-105 transition-all text-white flex items-center justify-center flex-shrink-0"
                         title="Thêm TLD"
                       >
                         <Plus size={20}/>
@@ -1301,7 +1387,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-slate-950/50 p-6 rounded-3xl border border-slate-800/50">
+                <div className="bg-slate-950/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800/50">
                    <label className="text-[10px] font-black text-slate-600 mb-3 block uppercase tracking-[0.2em]">Danh sách TLD đang quét:</label>
                    <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar pr-2">
                       {availableTlds.map(t => (
@@ -1319,7 +1405,7 @@ export default function App() {
                    <button 
                      onClick={() => startCrawl(false)} 
                      disabled={isProcessing} 
-                     className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-[2rem] font-black text-xl text-white flex items-center justify-center gap-4 hover:scale-[1.01] transition-all shadow-xl shadow-blue-900/20 active:scale-95 disabled:opacity-50"
+                     className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] font-black text-lg sm:text-xl text-white flex items-center justify-center gap-3 sm:gap-4 hover:scale-[1.01] transition-all shadow-xl shadow-blue-900/20 active:scale-95 disabled:opacity-50"
                    >
                        {isProcessing ? <RefreshCw className="animate-spin"/> : <Zap/>} BẮT ĐẦU TRUY QUÉT HỆ THỐNG
                        <span className="ml-auto text-xs bg-slate-950/60 border border-white/20 px-3 py-1.5 rounded-xl font-mono text-slate-200 font-normal flex items-center gap-1.5 hidden sm:flex">
@@ -1335,8 +1421,8 @@ export default function App() {
         );
       case Step.Filter:
         return (
-            <div className="max-w-2xl mx-auto mt-6 p-10 bg-slate-900 border border-slate-800 rounded-[3rem] shadow-2xl">
-                <h3 className="text-2xl font-black mb-10 flex items-center gap-4 text-emerald-500"><Filter/> Cấu hình SEO & Ngân sách</h3>
+            <div className="max-w-2xl mx-auto my-4 sm:my-10 p-4 sm:p-8 md:p-10 bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl md:rounded-[3rem] shadow-2xl">
+                <h3 className="text-xl sm:text-2xl font-black mb-6 sm:mb-10 flex items-center gap-3 sm:gap-4 text-emerald-500"><Filter/> Cấu hình SEO & Ngân sách</h3>
                 <FilterControl label="Domain Rating (DR)" min={0} max={100} value={filterConfig.minDR} onChange={v => setFilterConfig({...filterConfig, minDR: v})}/>
                 <FilterControl label="Trust Flow (TF)" min={0} max={100} value={filterConfig.minTF} onChange={v => setFilterConfig({...filterConfig, minTF: v})}/>
                 <FilterControl 
@@ -1349,15 +1435,15 @@ export default function App() {
                   description="⚠️ Quy tắc duyệt: Tên miền có giá mua vượt quá 40$ sẽ KHÔNG bao giờ được duyệt vào danh sách Clean"
                 />
                 
-                <div className="mt-8 bg-slate-950 p-6 rounded-3xl border border-slate-800 space-y-4">
+                <div className="mt-8 bg-slate-950 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800 space-y-4">
                   <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest flex items-center gap-2">
                     <History className="text-blue-400" size={16}/> Thuật toán lọc Wayback Machine (web.archive.org)
                   </label>
 
-                  <label className="flex items-center justify-between cursor-pointer group p-3.5 bg-blue-950/70 hover:bg-blue-900/70 rounded-2xl border border-blue-700/80 transition-colors shadow-lg shadow-blue-950/40">
+                  <label className="flex items-center justify-between cursor-pointer group p-3 sm:p-3.5 bg-blue-950/70 hover:bg-blue-900/70 rounded-2xl border border-blue-700/80 transition-colors shadow-lg shadow-blue-950/40">
                     <div>
-                      <span className="text-sm font-black text-blue-200 group-hover:text-white transition-colors flex items-center gap-2">
-                        <History size={18} className="text-blue-400 animate-pulse"/> Loại bỏ domain không có lịch sử web.archive.org
+                      <span className="text-xs sm:text-sm font-black text-blue-200 group-hover:text-white transition-colors flex items-center gap-2">
+                        <History size={18} className="text-blue-400 animate-pulse flex-shrink-0"/> Loại bỏ domain không có lịch sử web.archive.org
                       </span>
                       <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
                         Tự động <b>loại bỏ hoàn toàn</b> các tên miền báo lỗi <span className="text-amber-300 font-mono">"Wayback Machine has not archived that URL"</span> hoặc <span className="text-amber-300 font-mono">"No URLs captured"</span> (0 Snapshots).
@@ -1391,229 +1477,358 @@ export default function App() {
 
                   <div className="pt-2 border-t border-slate-800/80 space-y-3">
                     <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
-                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
-                        <ShieldAlert size={16} className="text-amber-400"/> Lọc 301 Redirect & Parked Domain Spam
+                      <span className="text-xs sm:text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <ShieldAlert size={16} className="text-amber-400 flex-shrink-0"/> Lọc 301 Redirect & Parked Domain Spam
                       </span>
                       <input 
                         type="checkbox" 
                         checked={filterConfig.excludeWayback301Spam} 
                         onChange={e => setFilterConfig({...filterConfig, excludeWayback301Spam: e.target.checked})} 
-                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded flex-shrink-0 ml-2"
                       />
                     </label>
 
                     <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
-                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
-                        <Globe size={16} className="text-purple-400"/> Lọc Đổi Ngôn Ngữ Bất Thường (Chinese/Japanese Gambling)
+                      <span className="text-xs sm:text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <Globe size={16} className="text-purple-400 flex-shrink-0"/> Lọc Đổi Ngôn Ngữ Bất Thường (Chinese/Japanese Gambling)
                       </span>
                       <input 
                         type="checkbox" 
                         checked={filterConfig.excludeWaybackForeignLanguageSpam} 
                         onChange={e => setFilterConfig({...filterConfig, excludeWaybackForeignLanguageSpam: e.target.checked})} 
-                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded flex-shrink-0 ml-2"
                       />
                     </label>
 
                     <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
-                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
-                        <Bug size={16} className="text-blue-400"/> Kích hoạt Deep Wayback Audit (Phát hiện Footprint PBN)
+                      <span className="text-xs sm:text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <Bug size={16} className="text-blue-400 flex-shrink-0"/> Kích hoạt Deep Wayback Audit (Phát hiện Footprint PBN)
                       </span>
                       <input 
                         type="checkbox" 
                         checked={filterConfig.enableDeepWaybackAudit} 
                         onChange={e => setFilterConfig({...filterConfig, enableDeepWaybackAudit: e.target.checked})} 
-                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded flex-shrink-0 ml-2"
                       />
                     </label>
 
                     <label className="flex items-center justify-between cursor-pointer group p-3 bg-slate-900/60 hover:bg-slate-900 rounded-2xl border border-slate-800 transition-colors">
-                      <span className="text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
-                        <XCircle size={18} className="text-red-400"/> Loại bỏ toàn bộ domain chứa dấu gạch ngang (-)
+                      <span className="text-xs sm:text-sm font-bold text-slate-300 group-hover:text-white transition-colors flex items-center gap-2">
+                        <XCircle size={18} className="text-red-400 flex-shrink-0"/> Loại bỏ toàn bộ domain chứa dấu gạch ngang (-)
                       </span>
                       <input 
                         type="checkbox" 
                         checked={filterConfig.excludeHyphenDomains} 
                         onChange={e => setFilterConfig({...filterConfig, excludeHyphenDomains: e.target.checked})} 
-                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded"
+                        className="accent-emerald-500 w-5 h-5 cursor-pointer rounded flex-shrink-0 ml-2"
                       />
                     </label>
                   </div>
                 </div>
 
-                <div className="mt-8 bg-slate-950 p-6 rounded-3xl border border-slate-800">
+                <div className="mt-8 bg-slate-950 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800">
                   <label className="text-xs font-bold text-slate-500 mb-4 block uppercase tracking-widest">Sàn giao dịch hỗ trợ</label>
-                  <div className="flex gap-8">
+                  <div className="flex flex-wrap gap-4 sm:gap-8">
                     {['SAV', 'Namecheap', 'Registry'].map((market) => (
                         <label key={market} className="flex items-center gap-3 cursor-pointer group">
                             <div onClick={() => setAllowedMarketplaces(prev => prev.includes(market as any) ? prev.filter(m => m !== market) : [...prev, market as any])}
-                                className={`w-7 h-7 rounded-xl border-2 flex items-center justify-center transition-all ${allowedMarketplaces.includes(market as any) ? 'bg-blue-600 border-blue-600 shadow-lg shadow-blue-900/20' : 'bg-slate-800 border-slate-700'}`}>
-                                {allowedMarketplaces.includes(market as any) && <CheckSquare size={18} className="text-white"/>}
+                                className={`w-6 h-6 sm:w-7 sm:h-7 rounded-xl border-2 flex items-center justify-center transition-all ${allowedMarketplaces.includes(market as any) ? 'bg-blue-600 border-blue-600 shadow-lg shadow-blue-900/20' : 'bg-slate-800 border-slate-700'}`}>
+                                {allowedMarketplaces.includes(market as any) && <CheckSquare size={16} className="text-white"/>}
                             </div>
-                            <span className="text-sm font-black text-slate-400 group-hover:text-white transition-colors">{market}</span>
+                            <span className="text-xs sm:text-sm font-black text-slate-400 group-hover:text-white transition-colors">{market}</span>
                         </label>
                     ))}
                   </div>
                 </div>
                 
-                <button onClick={applyFilters} className="w-full bg-emerald-600 p-6 rounded-[2rem] font-black text-white mt-12 hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-900/20 active:scale-95">XÁC NHẬN & CHẠY BỘ LỌC WAYBACK</button>
+                <button onClick={applyFilters} className="w-full bg-emerald-600 p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] font-black text-white mt-8 sm:mt-12 hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-900/20 active:scale-95 text-sm sm:text-base uppercase tracking-wider">XÁC NHẬN & CHẠY BỘ LỌC WAYBACK</button>
             </div>
         );
       case Step.PenaltyCheck:
         return (
-            <div className="max-w-2xl mx-auto mt-20 p-12 bg-slate-900 border border-slate-800 rounded-[3rem] text-center shadow-2xl">
-                <div className="w-24 h-24 bg-blue-600/20 rounded-full flex items-center justify-center mx-auto mb-8 animate-pulse shadow-[0_0_50px_rgba(37,99,235,0.2)]"><ShieldCheck className="text-blue-500" size={48}/></div>
-                <h2 className="text-3xl font-black text-white mb-4 uppercase tracking-tighter">Penalty & Quality Audit</h2>
-                <p className="text-slate-400 mb-10 font-medium">Đang kiểm tra chỉ số index Google, quét mã độc Safe Browsing và lọc lịch sử Archive bẩn...</p>
-                <div className="w-full bg-slate-950 h-4 rounded-full overflow-hidden border border-slate-800 shadow-inner">
+            <div className="max-w-2xl mx-auto my-8 sm:my-20 p-6 sm:p-12 bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-[3rem] text-center shadow-2xl">
+                <div className="w-16 h-16 sm:w-24 sm:h-24 bg-blue-600/20 rounded-full flex items-center justify-center mx-auto mb-6 sm:mb-8 animate-pulse shadow-[0_0_50px_rgba(37,99,235,0.2)]"><ShieldCheck className="text-blue-500" size={36}/></div>
+                <h2 className="text-2xl sm:text-3xl font-black text-white mb-3 sm:mb-4 uppercase tracking-tighter">Penalty & Quality Audit</h2>
+                <p className="text-xs sm:text-sm text-slate-400 mb-8 sm:mb-10 font-medium">Đang kiểm tra chỉ số index Google, quét mã độc Safe Browsing và lọc lịch sử Archive bẩn...</p>
+                <div className="w-full bg-slate-950 h-3 sm:h-4 rounded-full overflow-hidden border border-slate-800 shadow-inner">
                   <div className="h-full bg-gradient-to-r from-blue-600 via-indigo-500 to-blue-600 animate-[progress_2s_linear_infinite]" style={{width: '75%', backgroundSize: '200% 100%'}}></div>
                 </div>
-                <p className="mt-8 text-[10px] font-black text-slate-600 uppercase tracking-[0.4em]">Deep Scanning Engine v2.0</p>
+                <p className="mt-6 sm:mt-8 text-[10px] font-black text-slate-600 uppercase tracking-[0.4em]">Deep Scanning Engine v2.0</p>
             </div>
         );
       case Step.Output:
         return (
-          <div className="p-8 max-w-[1900px] mx-auto">
-            <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6 mb-10 bg-slate-900/60 p-8 rounded-[2.5rem] border border-slate-800 backdrop-blur-xl shadow-2xl">
-                <div>
-                    <h2 className="text-4xl font-black text-white tracking-tighter flex flex-wrap items-center gap-3">
-                      Inventory Sạch ({cleanDomainsWithGrowth.length.toLocaleString()})
-                      {highPotentialCount > 0 && (
-                        <span className="text-xs px-3 py-1 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-amber-300 border border-amber-500/50 rounded-full font-extrabold flex items-center gap-1.5 animate-pulse shadow-md">
-                          <Flame size={14} className="fill-amber-400 text-amber-400"/>
-                          {highPotentialCount} High Potential
-                        </span>
-                      )}
-                    </h2>
-                    <p className="text-slate-500 font-bold mt-1 uppercase text-[10px] tracking-widest flex items-center gap-2">
-                      <CheckCircle2 size={14} className="text-emerald-500"/> Đã qua bộ lọc AI & Technical Audit
-                    </p>
-
-                    <div className="flex flex-wrap items-center gap-3 mt-4">
-                      <button
-                        onClick={() => setFilterMode('all')}
-                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
-                          filterMode === 'all' 
-                            ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40' 
-                            : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-white'
-                        }`}
-                      >
-                        <CheckCircle2 size={14}/> Tất cả ({cleanDomainsWithGrowth.length.toLocaleString()})
-                      </button>
-
-                      <button
-                        onClick={() => setFilterMode('high_potential')}
-                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
-                          filterMode === 'high_potential' 
-                            ? 'bg-gradient-to-r from-amber-500 to-rose-600 text-white border-amber-400 shadow-lg shadow-amber-900/50 scale-105' 
-                            : 'bg-amber-950/40 text-amber-300 border-amber-800/80 hover:bg-amber-900/60'
-                        }`}
-                      >
-                        <Flame size={15} className="text-amber-400 animate-pulse fill-amber-400"/>
-                        <span>🔥 High Potential ({highPotentialCount.toLocaleString()})</span>
-                      </button>
-
-                      <button
-                        onClick={() => setFilterMode('available_only')}
-                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
-                          filterMode === 'available_only' 
-                            ? 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-900/50 scale-105' 
-                            : 'bg-emerald-950/40 text-emerald-300 border-emerald-800/80 hover:bg-emerald-900/60'
-                        }`}
-                      >
-                        <CheckCircle2 size={15} className="text-emerald-400"/>
-                        <span>🟢 Chỉ Domain Đã Hết Hạn ({availableCount.toLocaleString()})</span>
-                      </button>
-
-                      <button
-                        onClick={() => setFilterMode('has_viewdns_history')}
-                        className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
-                          filterMode === 'has_viewdns_history' 
-                            ? 'bg-purple-600 text-white border-purple-400 shadow-lg shadow-purple-900/50 scale-105' 
-                            : 'bg-purple-950/40 text-purple-300 border-purple-800/80 hover:bg-purple-900/60'
-                        }`}
-                      >
-                        <Server size={15} className="text-purple-400"/>
-                        <span>🌐 Có Lịch Sử ViewDNS ({viewDnsHistoryCount.toLocaleString()})</span>
-                      </button>
-
-                      {duplicateDomainsCount > 0 && (
-                        <button
-                          onClick={() => setFilterMode('duplicate_only')}
-                          className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 border ${
-                            filterMode === 'duplicate_only' 
-                              ? 'bg-amber-600 text-white border-amber-400 shadow-lg shadow-amber-900/50 scale-105' 
-                              : 'bg-amber-950/40 text-amber-300 border-amber-800/80 hover:bg-amber-900/60'
-                          }`}
-                        >
-                          <Layers size={15} className="text-amber-400"/>
-                          <span>⚠️ Trùng Lặp ({duplicateDomainsCount.toLocaleString()})</span>
-                        </button>
-                      )}
-                    </div>
+          <div className="p-3 sm:p-6 md:p-8 max-w-[1900px] mx-auto space-y-6 relative pb-28">
+            {/* 1. TOP KPI STAT CARDS DASHBOARD */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+              {/* Card 1: Tất Cả */}
+              <div 
+                onClick={() => setFilterMode('all')}
+                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                  filterMode === 'all'
+                    ? 'bg-gradient-to-br from-blue-900/60 to-slate-900 border-blue-500 shadow-xl shadow-blue-950/50 ring-2 ring-blue-500/30 scale-[1.02]'
+                    : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <CheckCircle2 size={14} className="text-blue-400"/> Inventory Sạch
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
                 </div>
-                <div className="flex flex-wrap gap-4">
-                    {duplicateDomainsCount > 0 && (
-                      <button 
-                        onClick={removeDuplicateDomains} 
-                        className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-amber-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 animate-bounce"
-                        title="Tự động lọc và xóa bỏ các bản trùng lặp trong danh sách, chỉ giữ lại 1 bản duy nhất"
-                      >
-                        <Layers size={20}/>
-                        <span>Lọc Bỏ Trùng Lặp ({duplicateDomainsCount})</span>
-                      </button>
-                    )}
-                    <button 
-                      onClick={batchCheckViewDnsHistory} 
-                      disabled={isViewDnsChecking || displayedDomains.length === 0} 
-                      className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-purple-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                      title="Tự động quét tất cả domain chưa kiểm tra lịch sử IP ViewDNS (bỏ qua các domain đã được quét)"
-                    >
-                      {isViewDnsChecking ? <Loader2 size={20} className="animate-spin"/> : <Server size={20}/>}
-                      <span>{isViewDnsChecking ? 'Đang check ViewDNS...' : 'Check Lịch Sử ViewDNS'}</span>
-                    </button>
-                    <button 
-                      onClick={batchLiveCheckAvailability} 
-                      disabled={isLiveChecking || displayedDomains.length === 0} 
-                      className="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-4 rounded-2xl font-black shadow-xl shadow-cyan-900/40 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                      title="Quét trực tiếp bản ghi Live DNS cho tất cả domain đang có (bỏ qua các domain đã được quét trước đó)"
-                    >
-                      {isLiveChecking ? <Loader2 size={20} className="animate-spin"/> : <Search size={20}/>}
-                      <span>{isLiveChecking ? 'Đang check DNS...' : 'Check Live Hết Hạn'}</span>
-                    </button>
-                    <button onClick={resetTool} className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-4 rounded-2xl font-black border border-slate-700 flex items-center gap-3 transition-all hover:scale-105">
-                        <RotateCcw size={20}/> Quét lại
-                    </button>
-                    <button onClick={() => startCrawl(true)} disabled={isProcessing} className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-6 py-4 rounded-2xl font-black border border-blue-500/30 flex items-center gap-3 transition-all hover:scale-105">
-                        {isProcessing ? <Loader2 size={20} className="animate-spin"/> : <PlusCircle size={20}/>} Quét thêm
-                    </button>
-                    <button 
-                      onClick={copySelectedDomains} 
-                      disabled={displayedDomains.length === 0} 
-                      className={`px-6 py-4 rounded-2xl font-black border flex items-center gap-3 transition-all ${
-                        selectedIds.size > 0 
-                          ? 'bg-emerald-600 text-white border-emerald-500 shadow-xl shadow-emerald-900/40 hover:scale-105 active:scale-95' 
-                          : 'bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 border-emerald-800/80 hover:scale-105'
-                      } disabled:opacity-50 disabled:cursor-not-allowed`}
-                      title={selectedIds.size > 0 ? `Sao chép ${selectedIds.size} domain đã chọn` : `Sao chép toàn bộ ${displayedDomains.length} domain`}
-                    >
-                      <Copy size={20}/>
-                      <span>
-                        {selectedIds.size > 0 
-                          ? `Sao chép đã chọn (${selectedIds.size})` 
-                          : `Sao chép tất cả (${displayedDomains.length})`}
-                      </span>
-                    </button>
-                    <button onClick={deleteSelected} disabled={selectedIds.size === 0} className={`px-6 py-4 rounded-2xl font-black border flex items-center gap-3 transition-all ${selectedIds.size > 0 ? 'bg-red-900/20 text-red-400 border-red-900/50 shadow-lg shadow-red-900/20 hover:scale-105' : 'bg-slate-800/40 text-slate-700 border-slate-800 opacity-50 cursor-not-allowed'}`}>
-                        <Trash2 size={20}/> Xóa ({selectedIds.size})
-                    </button>
-                    <button onClick={exportToCSV} className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black shadow-2xl shadow-indigo-900/40 flex items-center gap-3 hover:bg-indigo-500 transition-all hover:scale-105">
-                        <Download size={20}/> Xuất CSV
-                    </button>
+                <div className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+                  {cleanDomainsWithGrowth.length.toLocaleString()}
                 </div>
+                <div className="text-[10px] text-slate-500 font-bold mt-1">Click để xem tất cả</div>
+              </div>
+
+              {/* Card 2: High Potential */}
+              <div 
+                onClick={() => setFilterMode('high_potential')}
+                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                  filterMode === 'high_potential'
+                    ? 'bg-gradient-to-br from-amber-950/80 to-slate-900 border-amber-500 shadow-xl shadow-amber-950/50 ring-2 ring-amber-500/30 scale-[1.02]'
+                    : 'bg-slate-900/80 border-slate-800 hover:border-amber-900/50 hover:bg-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                    <Flame size={14} className="text-amber-400 fill-amber-400 animate-pulse"/> High Potential
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono tracking-tight">
+                  {highPotentialCount.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-500 font-bold mt-1">Domain tiềm năng cao</div>
+              </div>
+
+              {/* Card 3: Domain Đã Hết Hạn */}
+              <div 
+                onClick={() => setFilterMode('available_only')}
+                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                  filterMode === 'available_only'
+                    ? 'bg-gradient-to-br from-emerald-950/80 to-slate-900 border-emerald-500 shadow-xl shadow-emerald-950/50 ring-2 ring-emerald-500/30 scale-[1.02]'
+                    : 'bg-slate-900/80 border-slate-800 hover:border-emerald-900/50 hover:bg-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+                    <CheckCircle2 size={14} className="text-emerald-400"/> Đã Hết Hạn
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-emerald-300 font-mono tracking-tight">
+                  {availableCount.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-500 font-bold mt-1">Sẵn sàng mua ngay</div>
+              </div>
+
+              {/* Card 4: ViewDNS Verified */}
+              <div 
+                onClick={() => setFilterMode('has_viewdns_history')}
+                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                  filterMode === 'has_viewdns_history'
+                    ? 'bg-gradient-to-br from-purple-950/80 to-slate-900 border-purple-500 shadow-xl shadow-purple-950/50 ring-2 ring-purple-500/30 scale-[1.02]'
+                    : 'bg-slate-900/80 border-slate-800 hover:border-purple-900/50 hover:bg-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                    <Server size={14} className="text-purple-400"/> ViewDNS History
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-purple-300 font-mono tracking-tight">
+                  {viewDnsHistoryCount.toLocaleString()}
+                </div>
+                <div className="text-[10px] text-slate-500 font-bold mt-1">Có lịch sử IP</div>
+              </div>
+
+              {/* Card 5: Duplicate */}
+              <div 
+                onClick={() => setFilterMode('duplicate_only')}
+                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group col-span-2 sm:col-span-1 ${
+                  filterMode === 'duplicate_only'
+                    ? 'bg-gradient-to-br from-amber-950/80 to-slate-900 border-amber-500 shadow-xl shadow-amber-950/50 ring-2 ring-amber-500/30 scale-[1.02]'
+                    : 'bg-slate-900/80 border-slate-800 hover:border-amber-800/50 hover:bg-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                    <Layers size={14} className="text-amber-400"/> Bản Trùng Lặp
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono tracking-tight">
+                    {duplicateDomainsCount.toLocaleString()}
+                  </div>
+                  {duplicateDomainsCount > 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removeDuplicateDomains(); }}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10px] font-black shadow-md flex items-center gap-1 animate-pulse"
+                      title="Lọc và giữ 1 bản duy nhất"
+                    >
+                      <Layers size={12}/> Lọc bỏ
+                    </button>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-500 font-bold mt-1">Domain xuất hiện nhiều lần</div>
+              </div>
             </div>
 
-            {/* NEW SECTION: Traffic Volume Distribution Recharts Pie Chart */}
-            <div className="mb-10 bg-slate-900/80 border border-slate-800 p-6 md:p-8 rounded-[2.5rem] backdrop-blur-xl shadow-2xl">
+            {/* 2. UNIFIED SMART SEARCH & ACTION TOOLBAR */}
+            <div className="bg-slate-900/90 border border-slate-800 p-4 sm:p-6 rounded-2xl sm:rounded-3xl shadow-xl backdrop-blur-xl space-y-4">
+              <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 sm:gap-4">
+                {/* Search Box */}
+                <div className="relative flex-1">
+                  <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Tìm nhanh domain, từ khóa (VD: casino, travel, .vn)..."
+                    className="w-full bg-slate-950 pl-11 pr-10 py-3 rounded-xl sm:rounded-2xl border border-slate-800 outline-none text-sm font-bold text-white focus:border-blue-500 transition-all shadow-inner placeholder:text-slate-600"
+                  />
+                  {searchQuery && (
+                    <button 
+                      onClick={() => setSearchQuery("")} 
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-white rounded-lg hover:bg-slate-800"
+                    >
+                      <X size={16}/>
+                    </button>
+                  )}
+                </div>
+
+                {/* Sắp xếp dropdown */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400 whitespace-nowrap hidden sm:inline">Sắp xếp:</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="bg-slate-950 px-3 py-3 rounded-xl sm:rounded-2xl border border-slate-800 outline-none text-xs sm:text-sm font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
+                  >
+                    <option value="growth_desc">🔥 Điểm Tiềm Năng (Tăng Trưởng)</option>
+                    <option value="dr_desc">📊 DR (Domain Rating Cao nhất)</option>
+                    <option value="tf_desc">🛡️ TF (Trust Flow Cao nhất)</option>
+                    <option value="price_asc">💵 Giá Rẻ Nhất</option>
+                    <option value="traffic_desc">📈 Traffic Cao Nhất</option>
+                    <option value="url_asc">🔤 Tên Miền A - Z</option>
+                  </select>
+                </div>
+
+                {/* Lọc TLD dropdown */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400 whitespace-nowrap hidden sm:inline">TLD:</span>
+                  <select
+                    value={selectedTldFilter}
+                    onChange={(e) => setSelectedTldFilter(e.target.value)}
+                    className="bg-slate-950 px-3 py-3 rounded-xl sm:rounded-2xl border border-slate-800 outline-none text-xs sm:text-sm font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
+                  >
+                    <option value="all">Tất cả TLDs</option>
+                    {availableTlds.map(tld => (
+                      <option key={tld} value={tld}>{tld}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Toggle Traffic Chart Button */}
+                <button
+                  onClick={() => setShowTrafficChart(!showTrafficChart)}
+                  className={`px-3.5 py-3 rounded-xl sm:rounded-2xl text-xs font-black border transition-all flex items-center gap-2 whitespace-nowrap ${
+                    showTrafficChart 
+                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-900/40' 
+                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                  }`}
+                >
+                  <PieChartIcon size={16}/>
+                  <span>Biểu Đồ Traffic</span>
+                </button>
+              </div>
+
+              {/* Action Buttons Row */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-slate-800/80">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
+                  <span className="px-2.5 py-1 bg-slate-950 rounded-lg border border-slate-800 text-slate-300 font-mono">
+                    Hiển thị {displayedDomains.length.toLocaleString()} domain
+                  </span>
+                  {searchQuery && (
+                    <span className="text-[11px] text-blue-400 font-medium">
+                      (Đã lọc theo từ khóa "{searchQuery}")
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button 
+                    onClick={batchLiveCheckAvailability} 
+                    disabled={isLiveChecking || displayedDomains.length === 0} 
+                    className="bg-cyan-600 hover:bg-cyan-500 text-white px-3.5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-cyan-900/30 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                    title="Quét bản ghi Live DNS cho domain"
+                  >
+                    {isLiveChecking ? <Loader2 size={15} className="animate-spin"/> : <Search size={15}/>}
+                    <span>Check Live DNS</span>
+                  </button>
+
+                  <button 
+                    onClick={batchCheckViewDnsHistory} 
+                    disabled={isViewDnsChecking || displayedDomains.length === 0} 
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-3.5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-purple-900/30 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                    title="Quét lịch sử IP ViewDNS"
+                  >
+                    {isViewDnsChecking ? <Loader2 size={15} className="animate-spin"/> : <Server size={15}/>}
+                    <span>Check ViewDNS</span>
+                  </button>
+
+                  <button 
+                    onClick={copySelectedDomains} 
+                    disabled={displayedDomains.length === 0} 
+                    className={`px-3.5 py-2.5 rounded-xl text-xs font-black border flex items-center gap-2 transition-all ${
+                      selectedIds.size > 0 
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-900/40 hover:scale-105 active:scale-95' 
+                        : 'bg-slate-950 text-emerald-400 border-slate-800 hover:border-emerald-800 hover:bg-emerald-950/30'
+                    } disabled:opacity-50`}
+                  >
+                    <Copy size={15}/>
+                    <span>
+                      {selectedIds.size > 0 
+                        ? `Sao Chép Đã Chọn (${selectedIds.size})` 
+                        : `Sao Chép Tất Cả (${displayedDomains.length})`}
+                    </span>
+                  </button>
+
+                  <button 
+                    onClick={() => startCrawl(true)} 
+                    disabled={isProcessing} 
+                    className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 px-3.5 py-2.5 rounded-xl text-xs font-black border border-blue-500/30 flex items-center gap-2 transition-all hover:scale-105"
+                  >
+                    {isProcessing ? <Loader2 size={15} className="animate-spin"/> : <PlusCircle size={15}/>}
+                    <span>Quét Thêm</span>
+                  </button>
+
+                  <button 
+                    onClick={resetTool} 
+                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3.5 py-2.5 rounded-xl text-xs font-black border border-slate-700 flex items-center gap-2 transition-all hover:scale-105"
+                  >
+                    <RotateCcw size={15}/>
+                    <span>Quét Lại</span>
+                  </button>
+
+                  <button 
+                    onClick={exportToCSV} 
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-indigo-900/30 flex items-center gap-2 transition-all hover:scale-105"
+                  >
+                    <Download size={15}/>
+                    <span>Xuất CSV</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. COLLAPSIBLE TRAFFIC CHART SECTION */}
+            {showTrafficChart && (
+              <div className="bg-slate-900/80 border border-slate-800 p-6 md:p-8 rounded-[2.5rem] backdrop-blur-xl shadow-2xl animate-in fade-in slide-in-from-top-4 duration-300">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 border-b border-slate-800/80 pb-6">
                 <div>
                   <h3 className="text-2xl font-black text-white tracking-tight flex items-center gap-3">
@@ -1803,9 +2018,10 @@ export default function App() {
                 </div>
               )}
             </div>
+          )}
 
-            <div className="bg-slate-900 border border-slate-800 rounded-[3rem] overflow-hidden shadow-2xl">
-                <table className="w-full text-left border-separate border-spacing-0">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl md:rounded-[3rem] overflow-hidden shadow-2xl overflow-x-auto custom-scrollbar">
+                <table className="w-full min-w-[1000px] text-left border-separate border-spacing-0">
                     <thead>
                         <tr className="bg-slate-950/90 text-slate-500 uppercase text-[10px] font-black tracking-widest sticky top-0 z-20">
                             <th className="p-6 border-b border-slate-800 w-10 text-center"><input type="checkbox" checked={selectedIds.size === displayedDomains.length && displayedDomains.length > 0} onChange={() => setSelectedIds(new Set(selectedIds.size === displayedDomains.length ? [] : displayedDomains.map(d => d.id)))} className="accent-blue-500 w-5 h-5 cursor-pointer rounded"/></th>
@@ -2089,6 +2305,58 @@ export default function App() {
                   </div>
                 )}
             </div>
+
+            {/* FLOATING ACTION BAR WHEN DOMAINS ARE SELECTED */}
+            {selectedIds.size > 0 && (
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-blue-500/50 rounded-2xl p-3 sm:p-4 shadow-[0_10px_40px_rgba(0,0,0,0.8)] backdrop-blur-2xl flex flex-wrap items-center justify-between gap-3 max-w-[95vw] w-auto animate-in slide-in-from-bottom-6 duration-200">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-950/80 border border-blue-800/80 rounded-xl">
+                  <CheckCircle2 size={16} className="text-blue-400"/>
+                  <span className="text-xs font-black text-blue-200 font-mono">Đã chọn {selectedIds.size} domain</span>
+                </div>
+
+                <div className="h-5 w-px bg-slate-800 hidden sm:block"></div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button 
+                    onClick={copySelectedDomains}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all active:scale-95"
+                  >
+                    <Copy size={14}/> Sao Chép ({selectedIds.size})
+                  </button>
+
+                  <button 
+                    onClick={batchLiveCheckAvailability}
+                    disabled={isLiveChecking}
+                    className="bg-cyan-600 hover:bg-cyan-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isLiveChecking ? <Loader2 size={14} className="animate-spin"/> : <Search size={14}/>} Check Live
+                  </button>
+
+                  <button 
+                    onClick={batchCheckViewDnsHistory}
+                    disabled={isViewDnsChecking}
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    {isViewDnsChecking ? <Loader2 size={14} className="animate-spin"/> : <Server size={14}/>} ViewDNS
+                  </button>
+
+                  <button 
+                    onClick={deleteSelected}
+                    className="bg-red-900/50 hover:bg-red-600 text-red-200 hover:text-white border border-red-800/80 px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all active:scale-95"
+                  >
+                    <Trash2 size={14}/> Xóa ({selectedIds.size})
+                  </button>
+
+                  <button 
+                    onClick={() => setSelectedIds(new Set())}
+                    className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+                    title="Bỏ chọn tất cả"
+                  >
+                    <X size={16}/>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
       default: return null;
@@ -2111,45 +2379,45 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans selection:bg-blue-600/30">
-      <header className="h-24 bg-slate-900/95 backdrop-blur-2xl border-b border-slate-800 flex items-center justify-between px-12 sticky top-0 z-50 shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
-        <div className="flex items-center gap-6 cursor-pointer group" onClick={resetTool}>
-          <div className="bg-gradient-to-br from-orange-400 via-red-500 to-blue-600 w-14 h-14 rounded-2xl flex items-center justify-center font-black text-white text-3xl shadow-[0_0_20px_rgba(239,68,68,0.3)] group-hover:rotate-6 transition-all border border-white/10 overflow-hidden relative">
+      <header className="min-h-[72px] sm:h-24 bg-slate-900/95 backdrop-blur-2xl border-b border-slate-800 flex items-center justify-between px-3 sm:px-8 md:px-12 sticky top-0 z-50 shadow-[0_4px_30px_rgba(0,0,0,0.5)] py-2 sm:py-0">
+        <div className="flex items-center gap-2 sm:gap-6 cursor-pointer group" onClick={resetTool}>
+          <div className="bg-gradient-to-br from-orange-400 via-red-500 to-blue-600 w-10 h-10 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl flex items-center justify-center font-black text-white text-xl sm:text-3xl shadow-[0_0_20px_rgba(239,68,68,0.3)] group-hover:rotate-6 transition-all border border-white/10 overflow-hidden relative flex-shrink-0">
              <div className="absolute inset-0 bg-slate-900/20 group-hover:bg-transparent transition-colors"></div>
              <span className="relative z-10">P</span>
           </div>
           <div className="flex flex-col">
-             <span className="text-2xl font-black text-white tracking-tighter leading-none">PBN <span className="text-blue-500">HUNTER</span></span>
-             <span className="text-[10px] text-slate-500 font-black uppercase tracking-[0.4em] mt-1">Power of Phoenix</span>
+             <span className="text-lg sm:text-2xl font-black text-white tracking-tighter leading-none">PBN <span className="text-blue-500">HUNTER</span></span>
+             <span className="text-[8px] sm:text-[10px] text-slate-500 font-black uppercase tracking-[0.2em] sm:tracking-[0.4em] mt-1 hidden xs:block">Power of Phoenix</span>
           </div>
         </div>
         
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-2 sm:gap-4 md:gap-6">
             <div className="hidden lg:flex items-center gap-2 px-3.5 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-slate-400 font-bold shadow-inner" title="Nhấn Ctrl + Enter từ bất kỳ đâu để quét nhanh">
                 <Zap size={14} className="text-amber-400 fill-amber-400 animate-pulse"/>
                 <span>Quét nhanh:</span>
                 <kbd className="bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded border border-slate-700 font-mono text-[10px]">Ctrl</kbd> + <kbd className="bg-slate-800 text-slate-200 px-1.5 py-0.5 rounded border border-slate-700 font-mono text-[10px]">Enter</kbd>
             </div>
-            <div className="flex gap-4">
-                <a href="https://t.me/hima_dev" target="_blank" className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-5 py-2.5 rounded-xl text-xs font-black border border-blue-500/30 flex items-center gap-2 transition-all hover:scale-105">
-                    <Send size={14}/> Telegram @hima_dev
+            <div className="flex items-center gap-1.5 sm:gap-3">
+                <a href="https://t.me/hima_dev" target="_blank" className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-2.5 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black border border-blue-500/30 flex items-center gap-1.5 transition-all hover:scale-105">
+                    <Send size={14}/> <span className="hidden md:inline">Telegram @hima_dev</span>
                 </a>
-                <button onClick={() => setShowSyncModal(true)} className="bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 px-5 py-2.5 rounded-xl text-xs font-black border border-emerald-500/30 flex items-center gap-2 transition-all hover:scale-105">
-                    <Smartphone size={14}/> Đồng bộ thiết bị
+                <button onClick={() => setShowSyncModal(true)} className="bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 px-2.5 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black border border-emerald-500/30 flex items-center gap-1.5 transition-all hover:scale-105" title="Đồng bộ thiết bị">
+                    <Smartphone size={14}/> <span className="hidden sm:inline">Đồng bộ</span>
                 </button>
-                <button onClick={() => setShowBugReport(true)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-5 py-2.5 rounded-xl text-xs font-black border border-slate-700 flex items-center gap-2 transition-all hover:scale-105">
-                    <Bug size={14}/> Báo cáo lỗi
+                <button onClick={() => setShowBugReport(true)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black border border-slate-700 flex items-center gap-1.5 transition-all hover:scale-105" title="Báo cáo lỗi">
+                    <Bug size={14}/> <span className="hidden md:inline">Báo cáo lỗi</span>
                 </button>
             </div>
             {currentUser.role === 'admin' && (
-                <button onClick={() => setShowAdminDashboard(true)} className="bg-red-600 text-white p-2.5 rounded-xl shadow-lg shadow-red-900/20 hover:bg-red-500 transition-all hover:scale-110 border border-red-500/50"><Shield size={20}/></button>
+                <button onClick={() => setShowAdminDashboard(true)} className="bg-red-600 text-white p-2 sm:p-2.5 rounded-xl shadow-lg shadow-red-900/20 hover:bg-red-500 transition-all hover:scale-110 border border-red-500/50"><Shield size={18}/></button>
             )}
-            <button onClick={() => { logout(); setCurrentUser(null); }} className="bg-slate-800 p-2.5 rounded-xl text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 transition-all hover:scale-110"><LogOut size={20}/></button>
+            <button onClick={() => { logout(); setCurrentUser(null); }} className="bg-slate-800 p-2 sm:p-2.5 rounded-xl text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 transition-all hover:scale-110" title="Đăng xuất"><LogOut size={18}/></button>
         </div>
       </header>
 
       <main className="flex-1 overflow-y-auto custom-scrollbar">
           <div className="max-w-[1920px] mx-auto">
-              <StepIndicator currentStep={currentStep}/>
+              <StepIndicator currentStep={currentStep} onStepSelect={(step) => setCurrentStep(step)}/>
               <div className="pb-20">{renderStepContent()}</div>
           </div>
       </main>
