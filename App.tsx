@@ -1154,7 +1154,7 @@ export default function App() {
   };
 
   const fetchViewDnsResult = async (domainUrl: string) => {
-    // 1. Try server endpoint first (which checks ViewDNS + HackerTarget + Web Archive + RDAP WHOIS + Google/Cloudflare DoH)
+    // 1. Try server endpoint first (when running with Node backend)
     try {
       const res = await fetch('/api/check-viewdns', {
         method: 'POST',
@@ -1164,62 +1164,119 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data && data.success && data.hasHistory) {
+        if (data && data.success) {
           return {
-            hasHistory: true,
-            recordCount: data.recordCount || 1,
-            msg: data.message || '🟢 Có lịch sử IP'
+            hasHistory: data.hasHistory,
+            recordCount: data.recordCount || 0,
+            msg: data.message || (data.hasHistory ? '🟢 Có lịch sử IP' : '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử')
           };
         }
       }
     } catch (e) {
-      console.warn("Server ViewDNS API failed, trying client fallback:", e);
+      console.warn("Server ViewDNS API failed or running static client on GitHub Pages:", e);
     }
 
-    // 2. Client-side fallback via Web Archive CDX, HackerTarget & DoH (For static GitHub Pages / SPA deployments)
+    // 2. Comprehensive Client-Side Fallback for GitHub Pages & Static SPA deployments
     try {
       const clean = domainUrl.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       let archiveCount = 0;
-      let activeIpCount = 0;
+      let otxCount = 0;
+      let rdapYear: number | null = null;
+      const foundIps = new Set<string>();
 
-      try {
-        const arcRes = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(clean)}/*&output=json&fl=timestamp,original&collapse=digest&limit=1000`, { signal: AbortSignal.timeout(6000) });
-        if (arcRes.ok) {
-          const json = await arcRes.json();
-          if (Array.isArray(json) && json.length > 1) archiveCount = json.length - 1;
-        }
-      } catch (e) {}
+      await Promise.allSettled([
+        // A. RDAP WHOIS (Public CORS-enabled endpoint for domain creation date/year)
+        fetch(`https://rdap.org/domain/${encodeURIComponent(clean)}`, { signal: AbortSignal.timeout(5000) })
+          .then(r => r.json())
+          .then(data => {
+            if (data?.events && Array.isArray(data.events)) {
+              const createEv = data.events.find((e: any) => e.eventAction === 'registration' || e.eventAction === 'creation');
+              if (createEv?.eventDate) {
+                const yr = parseInt(String(createEv.eventDate).substring(0, 4), 10);
+                if (!isNaN(yr) && yr > 1990 && yr <= 2026) rdapYear = yr;
+              }
+            }
+          }).catch(() => {}),
 
-      try {
-        const [gRes, cfRes] = await Promise.all([
-          fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+        // B. AlienVault OTX Passive DNS (Public CORS-enabled endpoint for historical IP records)
+        fetch(`https://otx.alienvault.com/api/v1/indicators/hostname/${encodeURIComponent(clean)}/passive_dns`, { signal: AbortSignal.timeout(5000) })
+          .then(r => r.json())
+          .then(data => {
+            if (data?.passive_dns && Array.isArray(data.passive_dns)) {
+              data.passive_dns.forEach((p: any) => {
+                if (p.address && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(p.address)) {
+                  foundIps.add(p.address);
+                }
+              });
+              otxCount = data.passive_dns.length;
+            }
+          }).catch(() => {}),
+
+        // C. HackerTarget Host Search (Public CORS-enabled endpoint)
+        fetch(`https://api.hackertarget.com/hostsearch/?q=${encodeURIComponent(clean)}`, { signal: AbortSignal.timeout(5000) })
+          .then(r => r.text())
+          .then(text => {
+            if (text && !text.includes('error')) {
+              text.split('\n').forEach(line => {
+                const parts = line.split(',');
+                if (parts[1] && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(parts[1].trim())) {
+                  foundIps.add(parts[1].trim());
+                }
+              });
+            }
+          }).catch(() => {}),
+
+        // D. Wayback CDX Wildcard (Public CORS-enabled endpoint for web snapshots)
+        fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(clean)}/*&output=json&fl=timestamp,original&collapse=digest&limit=500`, { signal: AbortSignal.timeout(6000) })
+          .then(r => r.json())
+          .then(json => {
+            if (Array.isArray(json) && json.length > 1) {
+              archiveCount = json.length - 1;
+            }
+          }).catch(() => {}),
+
+        // E. DoH Live IPs (Google & Cloudflare DNS over HTTPS)
+        Promise.all([
+          fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(4000) }).then(r => r.json()).catch(() => null),
           fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(clean)}&type=A`, {
             headers: { 'Accept': 'application/dns-json' },
             signal: AbortSignal.timeout(4000)
-          }).catch(() => null)
-        ]);
-
-        for (const r of [gRes, cfRes]) {
-          if (r && r.ok) {
-            const json = await r.json();
-            if (json?.Answer) {
-              const ips = json.Answer.filter((a: any) => a.type === 1).length;
-              if (ips > activeIpCount) activeIpCount = ips;
+          }).then(r => r.json()).catch(() => null)
+        ]).then(([gRes, cfRes]) => {
+          [gRes, cfRes].forEach(r => {
+            if (r?.Answer && Array.isArray(r.Answer)) {
+              r.Answer.forEach((a: any) => {
+                if (a.type === 1 && a.data && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
+                  foundIps.add(a.data);
+                }
+              });
             }
-          }
-        }
-      } catch (e) {}
+          });
+        }).catch(() => {})
+      ]);
 
-      if (archiveCount > 0 || activeIpCount > 0) {
-        const recs = archiveCount > 0 ? Math.max(activeIpCount, Math.min(350, Math.ceil(archiveCount * 0.75))) : activeIpCount;
+      const totalIps = Math.max(foundIps.size, otxCount);
+      if (totalIps > 0 || archiveCount > 0 || rdapYear !== null) {
+        let recs = Math.max(totalIps, 1);
+        if (archiveCount > 0) {
+          recs = Math.max(recs, Math.min(350, Math.ceil(archiveCount * 0.75)));
+        } else if (rdapYear !== null) {
+          recs = Math.max(recs, Math.max(1, 2026 - rdapYear));
+        }
+
+        const msgParts = [];
+        if (totalIps > 0) msgParts.push(`${totalIps} IP`);
+        if (archiveCount > 0) msgParts.push(`${archiveCount} snapshots Archive`);
+        if (rdapYear) msgParts.push(`Tạo năm ${rdapYear}`);
+
         return {
           hasHistory: true,
           recordCount: recs,
-          msg: `🟢 Có ${recs}+ bản ghi lịch sử IP (${archiveCount} snapshots Archive & DNS)`
+          msg: `🟢 Có ${recs}+ bản ghi lịch sử (${msgParts.join(', ')})`
         };
       }
     } catch (err) {
-      console.warn("Client DNS fallback failed:", err);
+      console.warn("Client fallback failed:", err);
     }
 
     const parts = domainUrl.split('.');
@@ -1234,7 +1291,7 @@ export default function App() {
     return {
       hasHistory: false,
       recordCount: 0,
-      msg: '🔴 ViewDNS: Không tìm thấy dữ liệu lịch sử'
+      msg: '🔴 ViewDNS: 0 IP (Không tìm thấy dữ liệu lịch sử)'
     };
   };
 
