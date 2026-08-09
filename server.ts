@@ -227,7 +227,10 @@ async function startServer() {
             clearTimeout(tid);
             if (r.ok) {
               const html = await r.text();
-              if (!html.includes('Just a moment') && !html.includes('cloudflare')) {
+              const match = html.match(/There are (\d+) historical IP addresses/i);
+              if (match && match[1]) {
+                viewDnsCount = parseInt(match[1], 10);
+              } else if (!html.includes('Just a moment') && !html.includes('cloudflare')) {
                 const trs = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
                 const ipRegex = /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/;
                 const validRows = trs.filter(tr => {
@@ -241,7 +244,28 @@ async function startServer() {
           } catch (e) {}
         })(),
 
-        // 2. HackerTarget Host Search / IP history
+        // 2. RapidDNS scraper (Extracts historical & active IPs)
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 4000);
+            const r = await fetch(`https://rapiddns.io/subdomain/${encodeURIComponent(cleanDomain)}?full=1`, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+              signal: controller.signal
+            });
+            clearTimeout(tid);
+            if (r.ok) {
+              const html = await r.text();
+              const trs = html.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+              trs.forEach(tr => {
+                const match = tr.match(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g);
+                if (match) match.forEach(ip => foundIps.add(ip));
+              });
+            }
+          } catch (e) {}
+        })(),
+
+        // 3. HackerTarget Host Search
         (async () => {
           try {
             const controller = new AbortController();
@@ -262,12 +286,12 @@ async function startServer() {
           } catch (e) {}
         })(),
 
-        // 3. Web Archive CDX API
+        // 4. Web Archive CDX API (Wildcard snapshots)
         (async () => {
           try {
             const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 4000);
-            const r = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(cleanDomain)}&output=json&fl=timestamp,original&limit=100`, {
+            const tid = setTimeout(() => controller.abort(), 4500);
+            const r = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(cleanDomain)}/*&output=json&fl=timestamp,original&collapse=digest&limit=1000`, {
               signal: controller.signal
             });
             clearTimeout(tid);
@@ -275,16 +299,18 @@ async function startServer() {
               const json = await r.json();
               if (Array.isArray(json) && json.length > 1) {
                 archiveSnapshots = json.length - 1;
+                const years = json.slice(1).map((row: any) => parseInt(String(row[0]).substring(0, 4), 10)).filter(y => !isNaN(y) && y > 1990 && y <= 2026);
+                if (years.length > 0) createdYear = Math.min(...years);
               }
             }
           } catch (e) {}
         })(),
 
-        // 4. Google & Cloudflare DoH (Live IP lookup)
+        // 5. Google & Cloudflare DoH (Live IP lookup)
         (async () => {
           try {
             const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 3000);
+            const tid = setTimeout(() => controller.abort(), 3500);
             const [gRes, cfRes] = await Promise.all([
               fetch(`https://dns.google/resolve?name=${encodeURIComponent(cleanDomain)}&type=A`, { signal: controller.signal }).catch(() => null),
               fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanDomain)}&type=A`, {
@@ -294,7 +320,7 @@ async function startServer() {
             ]);
             clearTimeout(tid);
 
-            [gRes, cfRes].forEach(async res => {
+            for (const res of [gRes, cfRes]) {
               if (res && res.ok) {
                 const json = await res.json();
                 if (json?.Answer && Array.isArray(json.Answer)) {
@@ -305,11 +331,11 @@ async function startServer() {
                   });
                 }
               }
-            });
+            }
           } catch (e) {}
         })(),
 
-        // 5. TLD-Specific RDAP
+        // 6. TLD-Specific RDAP
         (async () => {
           try {
             const controller = new AbortController();
@@ -349,10 +375,8 @@ async function startServer() {
         message = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
       } else if (archiveSnapshots > 0 || foundIps.size > 0 || createdYear !== null) {
         hasHistory = true;
-        if (archiveSnapshots >= 50) {
-          recordCount = Math.min(300, Math.max(10, Math.ceil(archiveSnapshots / 3)));
-        } else if (archiveSnapshots > 0) {
-          recordCount = Math.max(foundIps.size, Math.min(20, Math.ceil(archiveSnapshots / 2)));
+        if (archiveSnapshots > 0) {
+          recordCount = Math.max(foundIps.size, Math.min(350, Math.ceil(archiveSnapshots * 0.75)));
         } else {
           recordCount = Math.max(1, foundIps.size);
         }

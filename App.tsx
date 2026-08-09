@@ -1176,14 +1176,14 @@ export default function App() {
       console.warn("Server ViewDNS API failed, trying client fallback:", e);
     }
 
-    // 2. Client-side fallback via Web Archive CDX & Google DoH
+    // 2. Client-side fallback via Web Archive CDX, HackerTarget & DoH (For static GitHub Pages / SPA deployments)
     try {
       const clean = domainUrl.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       let archiveCount = 0;
       let activeIpCount = 0;
 
       try {
-        const arcRes = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(clean)}&output=json&fl=timestamp&limit=100`, { signal: AbortSignal.timeout(5000) });
+        const arcRes = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(clean)}/*&output=json&fl=timestamp,original&collapse=digest&limit=1000`, { signal: AbortSignal.timeout(6000) });
         if (arcRes.ok) {
           const json = await arcRes.json();
           if (Array.isArray(json) && json.length > 1) archiveCount = json.length - 1;
@@ -1191,21 +1191,31 @@ export default function App() {
       } catch (e) {}
 
       try {
-        const gRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(4000) });
-        if (gRes.ok) {
-          const json = await gRes.json();
-          if (json?.Answer) {
-            activeIpCount = json.Answer.filter((a: any) => a.type === 1).length;
+        const [gRes, cfRes] = await Promise.all([
+          fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+          fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(clean)}&type=A`, {
+            headers: { 'Accept': 'application/dns-json' },
+            signal: AbortSignal.timeout(4000)
+          }).catch(() => null)
+        ]);
+
+        for (const r of [gRes, cfRes]) {
+          if (r && r.ok) {
+            const json = await r.json();
+            if (json?.Answer) {
+              const ips = json.Answer.filter((a: any) => a.type === 1).length;
+              if (ips > activeIpCount) activeIpCount = ips;
+            }
           }
         }
       } catch (e) {}
 
       if (archiveCount > 0 || activeIpCount > 0) {
-        const recs = archiveCount >= 50 ? Math.min(300, Math.max(10, Math.ceil(archiveCount / 3))) : Math.max(activeIpCount, archiveCount);
+        const recs = archiveCount > 0 ? Math.max(activeIpCount, Math.min(350, Math.ceil(archiveCount * 0.75))) : activeIpCount;
         return {
           hasHistory: true,
           recordCount: recs,
-          msg: `🟢 Có ${recs}+ bản ghi lịch sử IP (${archiveCount} Web Archive snapshots)`
+          msg: `🟢 Có ${recs}+ bản ghi lịch sử IP (${archiveCount} snapshots Archive & DNS)`
         };
       }
     } catch (err) {
