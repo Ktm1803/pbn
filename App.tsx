@@ -206,7 +206,9 @@ export default function App() {
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [singleCopiedId, setSingleCopiedId] = useState<string | null>(null);
   const [isLiveChecking, setIsLiveChecking] = useState(false);
+  const [liveCheckProgress, setLiveCheckProgress] = useState<{ current: number; total: number; currentDomain: string } | null>(null);
   const [isViewDnsChecking, setIsViewDnsChecking] = useState(false);
+  const [viewDnsProgress, setViewDnsProgress] = useState<{ current: number; total: number; currentDomain: string } | null>(null);
   
   const [suggestKeywords, setSuggestKeywords] = useState<string[]>([]);
   const [selectedSuggestKeywords, setSelectedSuggestKeywords] = useState<string[]>([]);
@@ -1048,6 +1050,7 @@ export default function App() {
     }
 
     setIsLiveChecking(true);
+    setLiveCheckProgress({ current: 0, total: targets.length, currentDomain: targets[0]?.url || '' });
     if (alreadyScannedCount > 0) {
       addLog(`🔍 Bắt đầu quét Live WHOIS/DNS cho ${targets.length} domain chưa quét (Bỏ qua ${alreadyScannedCount} domain đã quét)...`);
     } else {
@@ -1059,6 +1062,12 @@ export default function App() {
 
     for (let i = 0; i < targets.length; i += chunkSize) {
       const chunk = targets.slice(i, i + chunkSize);
+      const currentNum = Math.min(i + chunk.length, targets.length);
+      setLiveCheckProgress({
+        current: currentNum,
+        total: targets.length,
+        currentDomain: chunk.map(c => c.url).join(', ')
+      });
 
       // Mark checking
       setDomains(prev => prev.map(d => chunk.some(c => c.id === d.id) ? { ...d, liveAvailability: 'checking' } : d));
@@ -1142,6 +1151,7 @@ export default function App() {
     }
 
     setIsLiveChecking(false);
+    setLiveCheckProgress(null);
     if (availCount > 0) {
       setFilterMode('available_only');
       addLog(`✅ Hoàn tất kiểm tra Live Mua! Phát hiện ${availCount}/${targets.length} domain đã hết hạn / tự do. Tự động lọc danh sách chỉ hiển thị domain sẵn sàng mua.`);
@@ -1345,6 +1355,7 @@ export default function App() {
     }
 
     setIsViewDnsChecking(true);
+    setViewDnsProgress({ current: 0, total: targets.length, currentDomain: targets[0]?.url || '' });
     if (alreadyScannedCount > 0) {
       addLog(`🔎 Bắt đầu quét lịch sử ViewDNS IP History cho ${targets.length} domain chưa quét (Đã tự động bỏ qua ${alreadyScannedCount} domain đã quét trước đó trong tổng số ${sourcePool.length} domain)...`);
     } else {
@@ -1353,8 +1364,16 @@ export default function App() {
 
     let historyCount = 0;
     let excludedCount = 0;
+    let currentIndex = 0;
 
     for (const target of targets) {
+      currentIndex++;
+      setViewDnsProgress({
+        current: currentIndex,
+        total: targets.length,
+        currentDomain: target.url
+      });
+
       setDomains(prev => prev.map(d => d.id === target.id ? { ...d, viewDnsStatus: 'checking' } : d));
 
       const result = await fetchViewDnsResult(target.url);
@@ -1380,6 +1399,7 @@ export default function App() {
     }
 
     setIsViewDnsChecking(false);
+    setViewDnsProgress(null);
 
     if (historyCount > 0) {
       setFilterMode('has_viewdns_history');
@@ -2065,7 +2085,11 @@ export default function App() {
                     title="Bấm để kiểm tra trực tiếp bản ghi DNS WHOIS xem domain đã hết hạn hay chưa"
                   >
                     {isLiveChecking ? <Loader2 size={14} className="animate-spin"/> : <Search size={14}/>}
-                    <span>Check Live DNS</span>
+                    <span>
+                      {isLiveChecking && liveCheckProgress
+                        ? `Đang check (${liveCheckProgress.current}/${liveCheckProgress.total})`
+                        : `Check Live DNS`}
+                    </span>
                   </button>
 
                   <button 
@@ -2075,7 +2099,11 @@ export default function App() {
                     title="Bấm để kiểm tra lịch sử IP ViewDNS"
                   >
                     {isViewDnsChecking ? <Loader2 size={14} className="animate-spin"/> : <Server size={14}/>}
-                    <span>Check ViewDNS</span>
+                    <span>
+                      {isViewDnsChecking && viewDnsProgress
+                        ? `Đang check (${viewDnsProgress.current}/${viewDnsProgress.total})`
+                        : `Check ViewDNS`}
+                    </span>
                   </button>
 
                   <button 
@@ -2126,27 +2154,54 @@ export default function App() {
               </div>
             </div>
 
-            {/* LIVE CHECKING RUNNING BANNER */}
-            {(isLiveChecking || isViewDnsChecking) && (
-              <div className="bg-gradient-to-r from-cyan-950/90 via-slate-900 to-purple-950/90 border border-cyan-500/40 p-3.5 sm:p-4 rounded-2xl flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top duration-300 shadow-xl">
-                <div className="flex items-center gap-3">
-                  <Loader2 size={20} className="text-cyan-400 animate-spin flex-shrink-0" />
-                  <div>
-                    <div className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
-                      <span>{isLiveChecking ? '⚡ Đang quét Live DNS / WHOIS cho các tên miền...' : '🌐 Đang quét lịch sử IP ViewDNS.info...'}</span>
+            {/* LIVE / VIEWDNS CHECKING RUNNING BANNER */}
+            {(isLiveChecking || isViewDnsChecking) && (() => {
+              const activeProgress = isLiveChecking ? liveCheckProgress : viewDnsProgress;
+              const current = activeProgress?.current || 0;
+              const total = activeProgress?.total || 0;
+              const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+              const currentDomain = activeProgress?.currentDomain || '';
+
+              return (
+                <div className="bg-gradient-to-r from-cyan-950/95 via-slate-900 to-purple-950/95 border border-cyan-500/50 p-4 sm:p-5 rounded-2xl flex flex-col gap-3 animate-in fade-in slide-in-from-top duration-300 shadow-2xl">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center flex-shrink-0">
+                        <Loader2 size={22} className="text-cyan-400 animate-spin" />
+                      </div>
+                      <div>
+                        <div className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
+                          <span>{isLiveChecking ? '⚡ Đang kiểm tra Live DNS / WHOIS' : '🌐 Đang quét lịch sử IP ViewDNS'}</span>
+                          <span className="px-2.5 py-0.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono text-xs font-bold">
+                            Domain {current}/{total} ({percent}%)
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-300 mt-1 flex items-center gap-1.5 font-mono">
+                          <span className="text-slate-400 font-sans font-bold">Đang check:</span>
+                          <span className="text-cyan-300 font-bold bg-slate-950 px-2.5 py-0.5 rounded border border-slate-800 truncate max-w-[280px] sm:max-w-[450px]">
+                            {currentDomain || 'Đang kết nối API...'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      {isLiveChecking 
-                        ? 'Kiểm tra RDAP & Google DoH để xác nhận chính xác domain đã hết hạn (NXDOMAIN)...' 
-                        : 'Kiểm tra lịch sử thay đổi IP server của tên miền trên ViewDNS...'}
+                    <div className="flex items-center gap-2">
+                      <div className="px-3.5 py-1.5 bg-cyan-950 border border-cyan-600/50 rounded-xl text-xs font-mono font-black text-cyan-300 flex items-center gap-2 shadow-inner">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+                        Đang check domain {current} / {total}
+                      </div>
                     </div>
                   </div>
+
+                  {/* Visual Progress Bar */}
+                  <div className="w-full bg-slate-950/80 rounded-full h-3 border border-slate-800 overflow-hidden p-0.5 relative">
+                    <div 
+                      className="bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500 h-full rounded-full transition-all duration-300 shadow-lg shadow-cyan-500/50"
+                      style={{ width: `${percent}%` }}
+                    ></div>
+                  </div>
                 </div>
-                <div className="px-3 py-1 bg-cyan-900/50 border border-cyan-700/60 rounded-xl text-[11px] font-mono font-bold text-cyan-300 whitespace-nowrap">
-                  Đang xử lý
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* 3. COLLAPSIBLE TRAFFIC CHART SECTION */}
             {showTrafficChart && (
@@ -2888,6 +2943,38 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Floating Sticky Progress Notification Widget */}
+      {(isLiveChecking || isViewDnsChecking) && (() => {
+        const activeProgress = isLiveChecking ? liveCheckProgress : viewDnsProgress;
+        const current = activeProgress?.current || 0;
+        const total = activeProgress?.total || 0;
+        const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+        const currentDomain = activeProgress?.currentDomain || '';
+
+        return (
+          <div className="fixed bottom-6 right-6 z-[60] bg-slate-900/95 backdrop-blur-md border border-cyan-500/60 text-white px-4 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom duration-300 max-w-sm sm:max-w-md ring-2 ring-cyan-500/20">
+            <div className="w-8 h-8 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center flex-shrink-0">
+              <Loader2 size={18} className="text-cyan-400 animate-spin" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-black text-white flex items-center justify-between gap-2">
+                <span>{isLiveChecking ? '⚡ Check Live DNS' : '🌐 Check ViewDNS'}</span>
+                <span className="text-cyan-300 font-mono font-bold">Domain {current}/{total} ({percent}%)</span>
+              </div>
+              <div className="text-[11px] text-cyan-200 font-mono truncate mt-0.5 font-bold">
+                {currentDomain || 'Đang xử lý...'}
+              </div>
+              <div className="w-full bg-slate-950 rounded-full h-1.5 border border-slate-800 overflow-hidden mt-1.5">
+                <div 
+                  className="bg-gradient-to-r from-cyan-400 to-purple-500 h-full rounded-full transition-all duration-200 shadow-sm"
+                  style={{ width: `${percent}%` }}
+                ></div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {copyToast && (
         <div className="fixed bottom-10 right-10 z-[70] bg-emerald-600 text-white font-extrabold px-6 py-4 rounded-2xl shadow-2xl shadow-emerald-950 flex items-center gap-3 animate-in slide-in-from-bottom-5 border border-emerald-400">
