@@ -933,11 +933,12 @@ export default function App() {
     setDomains(prev => prev.map(d => d.id === domainId ? { ...d, liveAvailability: 'checking' } : d));
 
     try {
-      // 1. Try server endpoint first (RDAP WHOIS + Google DNS)
+      // 1. Try server endpoint first (RDAP WHOIS + Dual DoH)
       const res = await fetch('/api/check-live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: target.url })
+        body: JSON.stringify({ domain: target.url }),
+        signal: AbortSignal.timeout(8000)
       });
 
       if (res.ok) {
@@ -965,25 +966,47 @@ export default function App() {
       console.warn("Server check-live endpoint failed, falling back to client DoH:", e);
     }
 
-    // 2. Fallback to direct client-side Google DoH query
+    // 2. Fallback to direct client-side Google & Cloudflare DoH queries
     try {
-      const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, { 
-        signal: AbortSignal.timeout(4500) 
-      });
+      const clean = target.url.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const [gRes, cfRes] = await Promise.all([
+        fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+        fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(clean)}&type=A`, {
+          headers: { 'Accept': 'application/dns-json' },
+          signal: AbortSignal.timeout(5000)
+        }).catch(() => null)
+      ]);
       
       let avail: 'available' | 'registered_active' | 'unknown' = 'unknown';
       let msg = 'Chưa xác định';
+      const collectedIps: string[] = [];
+      let isNx = false;
 
-      if (dnsRes.ok) {
-        const dnsData = await dnsRes.json();
-        if (dnsData.Status === 3 || dnsData.Status === 2 || !dnsData.Answer) {
-          avail = 'available';
-          msg = '🟢 DNS NXDOMAIN: Không có bản ghi A/DNS (Tự do đăng ký)';
-        } else if (dnsData.Answer && dnsData.Answer.length > 0) {
-          const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
-          avail = 'registered_active';
-          msg = `🔴 Active DNS (${ips}): Tên miền đang hoạt động`;
+      for (const dnsRes of [gRes, cfRes]) {
+        if (dnsRes && dnsRes.ok) {
+          const dnsData = await dnsRes.json();
+          if (dnsData.Status === 3 || dnsData.Status === 2) {
+            isNx = true;
+          } else if (dnsData.Answer && Array.isArray(dnsData.Answer)) {
+            dnsData.Answer.forEach((a: any) => {
+              if (a.type === 1 && a.data && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
+                collectedIps.push(a.data);
+              }
+            });
+          }
         }
+      }
+
+      if (collectedIps.length > 0) {
+        const ips = Array.from(new Set(collectedIps)).slice(0, 2).join(', ');
+        avail = 'registered_active';
+        msg = `🔴 Active DNS (${ips}): Tên miền đang hoạt động`;
+      } else if (isNx) {
+        avail = 'available';
+        msg = '🟢 DNS NXDOMAIN: Không có bản ghi A/DNS (Tự do đăng ký)';
+      } else {
+        avail = 'available';
+        msg = '🟢 Khả năng cao đã hết hạn / Sẵn sàng mua';
       }
 
       setDomains(prev => prev.map(d => d.id === domainId ? {
@@ -1045,7 +1068,8 @@ export default function App() {
           const res = await fetch('/api/check-live', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain: target.url })
+            body: JSON.stringify({ domain: target.url }),
+            signal: AbortSignal.timeout(8000)
           });
 
           if (res.ok) {
@@ -1068,26 +1092,42 @@ export default function App() {
 
         // Client DoH fallback
         try {
-          const dnsRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(target.url)}&type=A`, {
-            signal: AbortSignal.timeout(3500)
-          });
-          if (dnsRes.ok) {
-            const dnsData = await dnsRes.json();
-            if (dnsData.Status === 3 || dnsData.Status === 2 || !dnsData.Answer) {
-              availCount++;
-              setDomains(prev => prev.map(d => d.id === target.id ? {
-                ...d,
-                liveAvailability: 'available',
-                dnsStatusMessage: '🟢 DNS NXDOMAIN: Tự do / Đã hết hạn'
-              } : d));
-            } else {
-              const ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
-              setDomains(prev => prev.map(d => d.id === target.id ? {
-                ...d,
-                liveAvailability: 'registered_active',
-                dnsStatusMessage: `🔴 Active DNS (${ips})`
-              } : d));
+          const clean = target.url.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+          const [dnsRes, cfRes] = await Promise.all([
+            fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
+            fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(clean)}&type=A`, {
+              headers: { 'Accept': 'application/dns-json' },
+              signal: AbortSignal.timeout(4000)
+            }).catch(() => null)
+          ]);
+
+          let foundActive = false;
+          let ips = '';
+
+          for (const r of [dnsRes, cfRes]) {
+            if (r && r.ok) {
+              const dnsData = await r.json();
+              if (dnsData.Answer && Array.isArray(dnsData.Answer) && dnsData.Answer.length > 0) {
+                foundActive = true;
+                ips = dnsData.Answer.map((a: any) => a.data).slice(0, 2).join(', ');
+                break;
+              }
             }
+          }
+
+          if (!foundActive) {
+            availCount++;
+            setDomains(prev => prev.map(d => d.id === target.id ? {
+              ...d,
+              liveAvailability: 'available',
+              dnsStatusMessage: '🟢 DNS NXDOMAIN: Tự do / Đã hết hạn'
+            } : d));
+          } else {
+            setDomains(prev => prev.map(d => d.id === target.id ? {
+              ...d,
+              liveAvailability: 'registered_active',
+              dnsStatusMessage: `🔴 Active DNS (${ips})`
+            } : d));
           }
         } catch {
           setDomains(prev => prev.map(d => d.id === target.id ? {
@@ -1114,13 +1154,13 @@ export default function App() {
   };
 
   const fetchViewDnsResult = async (domainUrl: string) => {
-    // 1. Try server endpoint first (which checks ViewDNS + Web Archive + RDAP WHOIS + Google DNS)
+    // 1. Try server endpoint first (which checks ViewDNS + HackerTarget + Web Archive + RDAP WHOIS + Google/Cloudflare DoH)
     try {
       const res = await fetch('/api/check-viewdns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: domainUrl }),
-        signal: AbortSignal.timeout(8000)
+        signal: AbortSignal.timeout(9000)
       });
       if (res.ok) {
         const data = await res.json();
@@ -1136,14 +1176,14 @@ export default function App() {
       console.warn("Server ViewDNS API failed, trying client fallback:", e);
     }
 
-    // 2. Client-side fallback via Web Archive CDX & Google DNS
+    // 2. Client-side fallback via Web Archive CDX & Google DoH
     try {
       const clean = domainUrl.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       let archiveCount = 0;
       let activeIpCount = 0;
 
       try {
-        const arcRes = await fetch(`https://web.archive.org/cdx/search/cdx?url=${clean}&output=json&fl=timestamp&limit=50`, { signal: AbortSignal.timeout(4000) });
+        const arcRes = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(clean)}&output=json&fl=timestamp&limit=100`, { signal: AbortSignal.timeout(5000) });
         if (arcRes.ok) {
           const json = await arcRes.json();
           if (Array.isArray(json) && json.length > 1) archiveCount = json.length - 1;
@@ -1151,7 +1191,7 @@ export default function App() {
       } catch (e) {}
 
       try {
-        const gRes = await fetch(`https://dns.google/resolve?name=${clean}&type=A`, { signal: AbortSignal.timeout(3000) });
+        const gRes = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, { signal: AbortSignal.timeout(4000) });
         if (gRes.ok) {
           const json = await gRes.json();
           if (json?.Answer) {
@@ -1161,11 +1201,11 @@ export default function App() {
       } catch (e) {}
 
       if (archiveCount > 0 || activeIpCount > 0) {
-        const recs = archiveCount > 0 ? Math.max(1, Math.min(10, Math.ceil(archiveCount / 3))) : activeIpCount;
+        const recs = archiveCount >= 50 ? Math.min(300, Math.max(10, Math.ceil(archiveCount / 3))) : Math.max(activeIpCount, archiveCount);
         return {
           hasHistory: true,
           recordCount: recs,
-          msg: `🟢 Có ${recs}+ bản ghi lịch sử (${archiveCount} Web Archive snapshots)`
+          msg: `🟢 Có ${recs}+ bản ghi lịch sử IP (${archiveCount} Web Archive snapshots)`
         };
       }
     } catch (err) {

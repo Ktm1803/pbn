@@ -208,15 +208,15 @@ async function startServer() {
       let viewDnsCount = 0;
       let archiveSnapshots = 0;
       let createdYear: number | null = null;
-      const activeIps = new Set<string>();
+      const foundIps = new Set<string>();
 
-      // Execute all checks concurrently with Promise.allSettled
+      // Execute multi-source checks concurrently
       await Promise.allSettled([
-        // 1. Try ViewDNS.info direct
+        // 1. ViewDNS.info direct scraper
         (async () => {
           try {
             const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 3500);
+            const tid = setTimeout(() => controller.abort(), 4000);
             const r = await fetch(`https://viewdns.info/iphistory/?domain=${encodeURIComponent(cleanDomain)}`, {
               headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
@@ -241,12 +241,33 @@ async function startServer() {
           } catch (e) {}
         })(),
 
-        // 2. Web Archive CDX API
+        // 2. HackerTarget Host Search / IP history
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 3500);
+            const r = await fetch(`https://api.hackertarget.com/hostsearch/?q=${encodeURIComponent(cleanDomain)}`, {
+              signal: controller.signal
+            });
+            clearTimeout(tid);
+            if (r.ok) {
+              const text = await r.text();
+              text.split('\n').forEach(line => {
+                const parts = line.split(',');
+                if (parts[1] && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(parts[1].trim())) {
+                  foundIps.add(parts[1].trim());
+                }
+              });
+            }
+          } catch (e) {}
+        })(),
+
+        // 3. Web Archive CDX API
         (async () => {
           try {
             const controller = new AbortController();
             const tid = setTimeout(() => controller.abort(), 4000);
-            const r = await fetch(`https://web.archive.org/cdx/search/cdx?url=${cleanDomain}&output=json&fl=timestamp&limit=50`, {
+            const r = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(cleanDomain)}&output=json&fl=timestamp,original&limit=100`, {
               signal: controller.signal
             });
             clearTimeout(tid);
@@ -259,15 +280,50 @@ async function startServer() {
           } catch (e) {}
         })(),
 
-        // 3. RDAP WHOIS History
+        // 4. Google & Cloudflare DoH (Live IP lookup)
+        (async () => {
+          try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 3000);
+            const [gRes, cfRes] = await Promise.all([
+              fetch(`https://dns.google/resolve?name=${encodeURIComponent(cleanDomain)}&type=A`, { signal: controller.signal }).catch(() => null),
+              fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanDomain)}&type=A`, {
+                headers: { 'Accept': 'application/dns-json' },
+                signal: controller.signal
+              }).catch(() => null)
+            ]);
+            clearTimeout(tid);
+
+            [gRes, cfRes].forEach(async res => {
+              if (res && res.ok) {
+                const json = await res.json();
+                if (json?.Answer && Array.isArray(json.Answer)) {
+                  json.Answer.forEach((a: any) => {
+                    if (a.type === 1 && a.data && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
+                      foundIps.add(a.data);
+                    }
+                  });
+                }
+              }
+            });
+          } catch (e) {}
+        })(),
+
+        // 5. TLD-Specific RDAP
         (async () => {
           try {
             const controller = new AbortController();
             const tid = setTimeout(() => controller.abort(), 3500);
-            const tld = cleanDomain.split('.').pop();
-            const rdapUrl = (tld === 'com' || tld === 'net') 
-              ? `https://rdap.verisign.com/com/v1/domain/${cleanDomain}`
-              : `https://rdap.org/domain/${cleanDomain}`;
+            const tld = cleanDomain.split('.').pop() || '';
+            let rdapUrl = `https://rdap.org/domain/${cleanDomain}`;
+            if (tld === 'com' || tld === 'net') {
+              rdapUrl = `https://rdap.verisign.com/com/v1/domain/${cleanDomain}`;
+            } else if (tld === 'info') {
+              rdapUrl = `https://rdap.identitydigital.services/rdap/domain/${cleanDomain}`;
+            } else if (tld === 'org') {
+              rdapUrl = `https://rdap.publicinterestregistry.org/rdap/domain/${cleanDomain}`;
+            }
+            
             const r = await fetch(rdapUrl, { signal: controller.signal });
             clearTimeout(tid);
             if (r.ok) {
@@ -277,26 +333,6 @@ async function startServer() {
                 if (regEvent && regEvent.eventDate) {
                   createdYear = new Date(regEvent.eventDate).getFullYear();
                 }
-              }
-            }
-          } catch (e) {}
-        })(),
-
-        // 4. Google DNS
-        (async () => {
-          try {
-            const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 2500);
-            const r = await fetch(`https://dns.google/resolve?name=${cleanDomain}&type=A`, { signal: controller.signal });
-            clearTimeout(tid);
-            if (r.ok) {
-              const json = await r.json();
-              if (json.Answer && Array.isArray(json.Answer)) {
-                json.Answer.forEach((a: any) => {
-                  if (a.type === 1 && a.data && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
-                    activeIps.add(a.data);
-                  }
-                });
               }
             }
           } catch (e) {}
@@ -311,20 +347,22 @@ async function startServer() {
         hasHistory = true;
         recordCount = viewDnsCount;
         message = `🟢 Có ${recordCount} bản ghi lịch sử IP trên ViewDNS`;
-      } else if (archiveSnapshots > 0 || createdYear !== null) {
+      } else if (archiveSnapshots > 0 || foundIps.size > 0 || createdYear !== null) {
         hasHistory = true;
-        if (archiveSnapshots >= 10) recordCount = Math.min(10, Math.max(3, Math.ceil(archiveSnapshots / 3)));
-        else if (archiveSnapshots > 0) recordCount = Math.max(1, Math.min(5, Math.ceil(archiveSnapshots / 2)));
-        else recordCount = Math.max(1, activeIps.size);
+        if (archiveSnapshots >= 50) {
+          recordCount = Math.min(300, Math.max(10, Math.ceil(archiveSnapshots / 3)));
+        } else if (archiveSnapshots > 0) {
+          recordCount = Math.max(foundIps.size, Math.min(20, Math.ceil(archiveSnapshots / 2)));
+        } else {
+          recordCount = Math.max(1, foundIps.size);
+        }
 
         const details = [];
+        if (foundIps.size > 0) details.push(`${foundIps.size} IP`);
         if (archiveSnapshots > 0) details.push(`Archive: ${archiveSnapshots} snapshots`);
         if (createdYear) details.push(`Tạo năm ${createdYear}`);
-        message = `🟢 Có ${recordCount}+ bản ghi lịch sử (${details.join(', ')})`;
-      } else if (activeIps.size > 0) {
-        hasHistory = true;
-        recordCount = activeIps.size;
-        message = `🟢 Có ${recordCount} IP đang hoạt động (Google DNS)`;
+
+        message = `🟢 Có ${recordCount}+ bản ghi lịch sử IP (${details.join(', ')})`;
       } else {
         hasHistory = false;
         recordCount = 0;
@@ -362,15 +400,21 @@ async function startServer() {
       let activeIps: string[] = [];
 
       await Promise.allSettled([
-        // 1. RDAP lookup
+        // 1. TLD-Specific RDAP Lookup
         (async () => {
           try {
             const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 3500);
-            const tld = cleanDomain.split('.').pop();
-            const rdapUrl = (tld === 'com' || tld === 'net')
-              ? `https://rdap.verisign.com/com/v1/domain/${cleanDomain}`
-              : `https://rdap.org/domain/${cleanDomain}`;
+            const tid = setTimeout(() => controller.abort(), 4000);
+            const tld = cleanDomain.split('.').pop() || '';
+            let rdapUrl = `https://rdap.org/domain/${cleanDomain}`;
+            if (tld === 'com' || tld === 'net') {
+              rdapUrl = `https://rdap.verisign.com/com/v1/domain/${cleanDomain}`;
+            } else if (tld === 'info') {
+              rdapUrl = `https://rdap.identitydigital.services/rdap/domain/${cleanDomain}`;
+            } else if (tld === 'org') {
+              rdapUrl = `https://rdap.publicinterestregistry.org/rdap/domain/${cleanDomain}`;
+            }
+
             const r = await fetch(rdapUrl, { signal: controller.signal });
             clearTimeout(tid);
             if (r.status === 404) {
@@ -381,28 +425,46 @@ async function startServer() {
           } catch (e) {}
         })(),
 
-        // 2. Google DNS DoH lookup
+        // 2. Dual DoH Lookup (Google DNS + Cloudflare DNS)
         (async () => {
           try {
             const controller = new AbortController();
-            const tid = setTimeout(() => controller.abort(), 3000);
-            const r = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(cleanDomain)}&type=A`, { signal: controller.signal });
+            const tid = setTimeout(() => controller.abort(), 4000);
+            
+            const [gRes, cfRes] = await Promise.all([
+              fetch(`https://dns.google/resolve?name=${encodeURIComponent(cleanDomain)}&type=A`, { signal: controller.signal }).catch(() => null),
+              fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanDomain)}&type=A`, {
+                headers: { 'Accept': 'application/dns-json' },
+                signal: controller.signal
+              }).catch(() => null)
+            ]);
             clearTimeout(tid);
-            if (r.ok) {
-              const json = await r.json();
-              if (json.Status === 3 || json.Status === 2) {
-                dnsStatus = 'nxdomain';
-              } else if (json.Answer && Array.isArray(json.Answer) && json.Answer.length > 0) {
-                const ips = json.Answer.filter((a: any) => a.type === 1).map((a: any) => a.data);
-                if (ips.length > 0) {
-                  dnsStatus = 'active';
-                  activeIps = ips;
-                } else {
-                  dnsStatus = 'no_answer';
+
+            const collectedIps: string[] = [];
+            let isNxDomain = false;
+
+            for (const r of [gRes, cfRes]) {
+              if (r && r.ok) {
+                const json = await r.json();
+                if (json.Status === 3 || json.Status === 2) {
+                  isNxDomain = true;
+                } else if (json.Answer && Array.isArray(json.Answer)) {
+                  json.Answer.forEach((a: any) => {
+                    if (a.type === 1 && a.data && /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/.test(a.data)) {
+                      collectedIps.push(a.data);
+                    }
+                  });
                 }
-              } else {
-                dnsStatus = 'no_answer';
               }
+            }
+
+            if (collectedIps.length > 0) {
+              dnsStatus = 'active';
+              activeIps = Array.from(new Set(collectedIps));
+            } else if (isNxDomain) {
+              dnsStatus = 'nxdomain';
+            } else {
+              dnsStatus = 'no_answer';
             }
           } catch (e) {}
         })()
@@ -411,15 +473,18 @@ async function startServer() {
       let liveAvailability: 'available' | 'registered_active' | 'unknown' = 'unknown';
       let dnsStatusMessage = '';
 
-      if (rdapStatus === 'not_found') {
-        liveAvailability = 'available';
-        dnsStatusMessage = '🟢 Tự do đăng ký (WHOIS/RDAP không tồn tại)';
-      } else if (dnsStatus === 'active') {
+      if (dnsStatus === 'active') {
         liveAvailability = 'registered_active';
         dnsStatusMessage = `🔴 Active DNS (${activeIps.slice(0, 2).join(', ')}): Tên miền đang hoạt động`;
+      } else if (rdapStatus === 'not_found') {
+        liveAvailability = 'available';
+        dnsStatusMessage = '🟢 Tự do đăng ký (WHOIS / RDAP không tồn tại)';
       } else if (dnsStatus === 'nxdomain' || dnsStatus === 'no_answer') {
         liveAvailability = 'available';
         dnsStatusMessage = '🟢 Đã hết hạn / NXDOMAIN (Không có bản ghi DNS active)';
+      } else if (rdapStatus === 'registered') {
+        liveAvailability = 'registered_active';
+        dnsStatusMessage = '🔴 Tên miền đang trong thời hạn đăng ký (WHOIS Active)';
       } else {
         liveAvailability = 'available';
         dnsStatusMessage = '🟢 Khả năng cao đã hết hạn / Sẵn sàng mua';
