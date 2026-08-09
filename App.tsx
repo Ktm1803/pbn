@@ -197,7 +197,7 @@ export default function App() {
   const [availableTlds, setAvailableTlds] = useState<string[]>(INITIAL_TLDS);
   const [showBulkTldModal, setShowBulkTldModal] = useState(false);
   const [bulkTldInput, setBulkTldInput] = useState("");
-  const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'has_viewdns_history' | 'duplicate_only'>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'high_potential' | 'available_only' | 'active_dns_only' | 'has_viewdns_history' | 'duplicate_only'>('all');
   const [trafficFilter, setTrafficFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all');
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTldFilter, setSelectedTldFilter] = useState("all");
@@ -671,6 +671,10 @@ export default function App() {
     return cleanDomainsWithGrowth.filter(d => d.liveAvailability === 'available').length;
   }, [cleanDomainsWithGrowth]);
 
+  const activeDnsCount = useMemo(() => {
+    return cleanDomainsWithGrowth.filter(d => d.liveAvailability === 'registered_active').length;
+  }, [cleanDomainsWithGrowth]);
+
   const viewDnsHistoryCount = useMemo(() => {
     return cleanDomainsWithGrowth.filter(d => d.viewDnsStatus === 'has_history').length;
   }, [cleanDomainsWithGrowth]);
@@ -751,6 +755,8 @@ export default function App() {
       list = list.filter(d => d.isHighPotential);
     } else if (filterMode === 'available_only') {
       list = list.filter(d => d.liveAvailability === 'available');
+    } else if (filterMode === 'active_dns_only') {
+      list = list.filter(d => d.liveAvailability === 'registered_active');
     } else if (filterMode === 'has_viewdns_history') {
       list = list.filter(d => d.viewDnsStatus === 'has_history');
     } else if (filterMode === 'duplicate_only') {
@@ -1560,202 +1566,225 @@ export default function App() {
         return (
           <div className="p-3 sm:p-6 md:p-8 max-w-[1900px] mx-auto space-y-6 relative pb-28">
             {/* 1. TOP KPI STAT CARDS DASHBOARD */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-3.5">
               {/* Card 1: Tất Cả */}
               <div 
                 onClick={() => setFilterMode('all')}
-                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
                   filterMode === 'all'
                     ? 'bg-gradient-to-br from-blue-900/60 to-slate-900 border-blue-500 shadow-xl shadow-blue-950/50 ring-2 ring-blue-500/30 scale-[1.02]'
                     : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                    <CheckCircle2 size={14} className="text-blue-400"/> Inventory Sạch
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-blue-400"/> Inventory
                   </span>
                   <span className="w-2 h-2 rounded-full bg-blue-500"></span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+                <div className="text-2xl font-black text-white font-mono tracking-tight">
                   {cleanDomainsWithGrowth.length.toLocaleString()}
                 </div>
-                <div className="text-[10px] text-slate-500 font-bold mt-1">Click để xem tất cả</div>
+                <div className="text-[9px] text-slate-500 font-bold mt-0.5">Tất cả domain sạch</div>
               </div>
 
               {/* Card 2: High Potential */}
               <div 
                 onClick={() => setFilterMode('high_potential')}
-                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
                   filterMode === 'high_potential'
                     ? 'bg-gradient-to-br from-amber-950/80 to-slate-900 border-amber-500 shadow-xl shadow-amber-950/50 ring-2 ring-amber-500/30 scale-[1.02]'
                     : 'bg-slate-900/80 border-slate-800 hover:border-amber-900/50 hover:bg-slate-900'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                    <Flame size={14} className="text-amber-400 fill-amber-400 animate-pulse"/> High Potential
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                    <Flame size={13} className="text-amber-400 fill-amber-400 animate-pulse"/> High Potential
                   </span>
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono tracking-tight">
+                <div className="text-2xl font-black text-amber-300 font-mono tracking-tight">
                   {highPotentialCount.toLocaleString()}
                 </div>
-                <div className="text-[10px] text-slate-500 font-bold mt-1">Domain tiềm năng cao</div>
+                <div className="text-[9px] text-slate-500 font-bold mt-0.5">Tiềm năng cao</div>
               </div>
 
               {/* Card 3: Domain Đã Hết Hạn */}
               <div 
                 onClick={() => setFilterMode('available_only')}
-                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
                   filterMode === 'available_only'
                     ? 'bg-gradient-to-br from-emerald-950/80 to-slate-900 border-emerald-500 shadow-xl shadow-emerald-950/50 ring-2 ring-emerald-500/30 scale-[1.02]'
                     : 'bg-slate-900/80 border-slate-800 hover:border-emerald-900/50 hover:bg-slate-900'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
-                    <CheckCircle2 size={14} className="text-emerald-400"/> Đã Hết Hạn
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="text-emerald-400"/> Đã Hết Hạn
                   </span>
                   <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-emerald-300 font-mono tracking-tight">
+                <div className="text-2xl font-black text-emerald-300 font-mono tracking-tight">
                   {availableCount.toLocaleString()}
                 </div>
-                <div className="text-[10px] text-slate-500 font-bold mt-1">Sẵn sàng mua ngay</div>
+                <div className="text-[9px] text-slate-500 font-bold mt-0.5">Sẵn sàng mua (NXDOMAIN)</div>
               </div>
 
-              {/* Card 4: ViewDNS Verified */}
+              {/* Card 4: Active DNS */}
+              <div 
+                onClick={() => setFilterMode('active_dns_only')}
+                className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                  filterMode === 'active_dns_only'
+                    ? 'bg-gradient-to-br from-red-950/80 to-slate-900 border-red-500 shadow-xl shadow-red-950/50 ring-2 ring-red-500/30 scale-[1.02]'
+                    : 'bg-slate-900/80 border-slate-800 hover:border-red-900/50 hover:bg-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-red-300 flex items-center gap-1.5">
+                    <XCircle size={13} className="text-red-400"/> Active DNS
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                </div>
+                <div className="text-2xl font-black text-red-300 font-mono tracking-tight">
+                  {activeDnsCount.toLocaleString()}
+                </div>
+                <div className="text-[9px] text-slate-500 font-bold mt-0.5">Đang có DNS/IP active</div>
+              </div>
+
+              {/* Card 5: ViewDNS Verified */}
               <div 
                 onClick={() => setFilterMode('has_viewdns_history')}
-                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
                   filterMode === 'has_viewdns_history'
                     ? 'bg-gradient-to-br from-purple-950/80 to-slate-900 border-purple-500 shadow-xl shadow-purple-950/50 ring-2 ring-purple-500/30 scale-[1.02]'
                     : 'bg-slate-900/80 border-slate-800 hover:border-purple-900/50 hover:bg-slate-900'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
-                    <Server size={14} className="text-purple-400"/> ViewDNS History
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                    <Server size={13} className="text-purple-400"/> ViewDNS
                   </span>
                   <span className="w-2 h-2 rounded-full bg-purple-400"></span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-purple-300 font-mono tracking-tight">
+                <div className="text-2xl font-black text-purple-300 font-mono tracking-tight">
                   {viewDnsHistoryCount.toLocaleString()}
                 </div>
-                <div className="text-[10px] text-slate-500 font-bold mt-1">Có lịch sử IP</div>
+                <div className="text-[9px] text-slate-500 font-bold mt-0.5">Có lịch sử IP</div>
               </div>
 
-              {/* Card 5: Duplicate */}
+              {/* Card 6: Duplicate */}
               <div 
                 onClick={() => setFilterMode('duplicate_only')}
-                className={`p-4 sm:p-5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group col-span-2 sm:col-span-1 ${
+                className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
                   filterMode === 'duplicate_only'
                     ? 'bg-gradient-to-br from-amber-950/80 to-slate-900 border-amber-500 shadow-xl shadow-amber-950/50 ring-2 ring-amber-500/30 scale-[1.02]'
                     : 'bg-slate-900/80 border-slate-800 hover:border-amber-800/50 hover:bg-slate-900'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-                    <Layers size={14} className="text-amber-400"/> Bản Trùng Lặp
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                    <Layers size={13} className="text-amber-400"/> Trùng Lặp
                   </span>
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono tracking-tight">
+                  <div className="text-2xl font-black text-amber-300 font-mono tracking-tight">
                     {duplicateDomainsCount.toLocaleString()}
                   </div>
                   {duplicateDomainsCount > 0 && (
                     <button
                       onClick={(e) => { e.stopPropagation(); removeDuplicateDomains(); }}
-                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10px] font-black shadow-md flex items-center gap-1 animate-pulse"
+                      className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-[9px] font-black shadow flex items-center gap-1 animate-pulse"
                       title="Lọc và giữ 1 bản duy nhất"
                     >
-                      <Layers size={12}/> Lọc bỏ
+                      <Layers size={10}/> Lọc
                     </button>
                   )}
                 </div>
-                <div className="text-[10px] text-slate-500 font-bold mt-1">Domain xuất hiện nhiều lần</div>
+                <div className="text-[9px] text-slate-500 font-bold mt-0.5">Bản trùng</div>
               </div>
             </div>
 
             {/* 2. UNIFIED SMART SEARCH & ACTION TOOLBAR */}
-            <div className="bg-slate-900/90 border border-slate-800 p-4 sm:p-6 rounded-2xl sm:rounded-3xl shadow-xl backdrop-blur-xl space-y-4">
-              <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 sm:gap-4">
+            <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl sm:rounded-3xl shadow-xl backdrop-blur-xl space-y-3.5">
+              <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
                 {/* Search Box */}
                 <div className="relative flex-1">
-                  <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/>
+                  <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"/>
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Tìm nhanh domain, từ khóa (VD: casino, travel, .vn)..."
-                    className="w-full bg-slate-950 pl-11 pr-10 py-3 rounded-xl sm:rounded-2xl border border-slate-800 outline-none text-sm font-bold text-white focus:border-blue-500 transition-all shadow-inner placeholder:text-slate-600"
+                    placeholder="Tìm domain, từ khóa (VD: casino, travel, .vn)..."
+                    className="w-full bg-slate-950 pl-10 pr-9 py-2.5 rounded-xl border border-slate-800 outline-none text-xs sm:text-sm font-bold text-white focus:border-blue-500 transition-all shadow-inner placeholder:text-slate-600"
                   />
                   {searchQuery && (
                     <button 
                       onClick={() => setSearchQuery("")} 
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-white rounded-lg hover:bg-slate-800"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-white rounded-lg hover:bg-slate-800"
                     >
-                      <X size={16}/>
+                      <X size={14}/>
                     </button>
                   )}
                 </div>
 
-                {/* Sắp xếp dropdown */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-400 whitespace-nowrap hidden sm:inline">Sắp xếp:</span>
-                  <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as any)}
-                    className="bg-slate-950 px-3 py-3 rounded-xl sm:rounded-2xl border border-slate-800 outline-none text-xs sm:text-sm font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
-                  >
-                    <option value="growth_desc">🔥 Điểm Tiềm Năng (Tăng Trưởng)</option>
-                    <option value="dr_desc">📊 DR (Domain Rating Cao nhất)</option>
-                    <option value="tf_desc">🛡️ TF (Trust Flow Cao nhất)</option>
-                    <option value="price_asc">💵 Giá Rẻ Nhất</option>
-                    <option value="traffic_desc">📈 Traffic Cao Nhất</option>
-                    <option value="url_asc">🔤 Tên Miền A - Z</option>
-                  </select>
-                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Sắp xếp dropdown */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap hidden sm:inline">Sắp xếp:</span>
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as any)}
+                      className="bg-slate-950 px-3 py-2.5 rounded-xl border border-slate-800 outline-none text-xs font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
+                    >
+                      <option value="growth_desc">🔥 Điểm Tiềm Năng</option>
+                      <option value="dr_desc">📊 DR Cao nhất</option>
+                      <option value="tf_desc">🛡️ TF Cao nhất</option>
+                      <option value="price_asc">💵 Giá Rẻ Nhất</option>
+                      <option value="traffic_desc">📈 Traffic Cao Nhất</option>
+                      <option value="url_asc">🔤 Tên Miền A - Z</option>
+                    </select>
+                  </div>
 
-                {/* Lọc TLD dropdown */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-400 whitespace-nowrap hidden sm:inline">TLD:</span>
-                  <select
-                    value={selectedTldFilter}
-                    onChange={(e) => setSelectedTldFilter(e.target.value)}
-                    className="bg-slate-950 px-3 py-3 rounded-xl sm:rounded-2xl border border-slate-800 outline-none text-xs sm:text-sm font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
-                  >
-                    <option value="all">Tất cả TLDs</option>
-                    {availableTlds.map(tld => (
-                      <option key={tld} value={tld}>{tld}</option>
-                    ))}
-                  </select>
-                </div>
+                  {/* Lọc TLD dropdown */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold text-slate-400 whitespace-nowrap hidden sm:inline">TLD:</span>
+                    <select
+                      value={selectedTldFilter}
+                      onChange={(e) => setSelectedTldFilter(e.target.value)}
+                      className="bg-slate-950 px-3 py-2.5 rounded-xl border border-slate-800 outline-none text-xs font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
+                    >
+                      <option value="all">Tất cả TLDs</option>
+                      {availableTlds.map(tld => (
+                        <option key={tld} value={tld}>{tld}</option>
+                      ))}
+                    </select>
+                  </div>
 
-                {/* Toggle Traffic Chart Button */}
-                <button
-                  onClick={() => setShowTrafficChart(!showTrafficChart)}
-                  className={`px-3.5 py-3 rounded-xl sm:rounded-2xl text-xs font-black border transition-all flex items-center gap-2 whitespace-nowrap ${
-                    showTrafficChart 
-                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-900/40' 
-                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
-                  }`}
-                >
-                  <PieChartIcon size={16}/>
-                  <span>Biểu Đồ Traffic</span>
-                </button>
+                  {/* Toggle Traffic Chart Button */}
+                  <button
+                    onClick={() => setShowTrafficChart(!showTrafficChart)}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-black border transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                      showTrafficChart 
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-md' 
+                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <PieChartIcon size={14}/>
+                    <span>Biểu Đồ Traffic</span>
+                  </button>
+                </div>
               </div>
 
               {/* Action Buttons Row */}
-              <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-slate-800/80">
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2.5 border-t border-slate-800/80">
                 <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
-                  <span className="px-2.5 py-1 bg-slate-950 rounded-lg border border-slate-800 text-slate-300 font-mono">
+                  <span className="px-2.5 py-1 bg-slate-950 rounded-lg border border-slate-800 text-slate-300 font-mono text-[11px]">
                     Hiển thị {displayedDomains.length.toLocaleString()} domain
                   </span>
                   {searchQuery && (
-                    <span className="text-[11px] text-blue-400 font-medium">
-                      (Đã lọc theo từ khóa "{searchQuery}")
+                    <span className="text-[11px] text-blue-400 font-medium hidden sm:inline">
+                      (Đã lọc từ khóa "{searchQuery}")
                     </span>
                   )}
                 </div>
@@ -1764,67 +1793,92 @@ export default function App() {
                   <button 
                     onClick={batchLiveCheckAvailability} 
                     disabled={isLiveChecking || displayedDomains.length === 0} 
-                    className="bg-cyan-600 hover:bg-cyan-500 text-white px-3.5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-cyan-900/30 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                    title="Quét bản ghi Live DNS cho domain"
+                    className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md shadow-cyan-950/50 flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                    title="Bấm để kiểm tra trực tiếp bản ghi DNS WHOIS xem domain đã hết hạn hay chưa"
                   >
-                    {isLiveChecking ? <Loader2 size={15} className="animate-spin"/> : <Search size={15}/>}
+                    {isLiveChecking ? <Loader2 size={14} className="animate-spin"/> : <Search size={14}/>}
                     <span>Check Live DNS</span>
                   </button>
 
                   <button 
                     onClick={batchCheckViewDnsHistory} 
                     disabled={isViewDnsChecking || displayedDomains.length === 0} 
-                    className="bg-purple-600 hover:bg-purple-500 text-white px-3.5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-purple-900/30 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
-                    title="Quét lịch sử IP ViewDNS"
+                    className="bg-purple-600 hover:bg-purple-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 disabled:opacity-50"
+                    title="Bấm để kiểm tra lịch sử IP ViewDNS"
                   >
-                    {isViewDnsChecking ? <Loader2 size={15} className="animate-spin"/> : <Server size={15}/>}
+                    {isViewDnsChecking ? <Loader2 size={14} className="animate-spin"/> : <Server size={14}/>}
                     <span>Check ViewDNS</span>
                   </button>
 
                   <button 
                     onClick={copySelectedDomains} 
                     disabled={displayedDomains.length === 0} 
-                    className={`px-3.5 py-2.5 rounded-xl text-xs font-black border flex items-center gap-2 transition-all ${
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black border flex items-center gap-1.5 transition-all ${
                       selectedIds.size > 0 
-                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-900/40 hover:scale-105 active:scale-95' 
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-md' 
                         : 'bg-slate-950 text-emerald-400 border-slate-800 hover:border-emerald-800 hover:bg-emerald-950/30'
                     } disabled:opacity-50`}
                   >
-                    <Copy size={15}/>
+                    <Copy size={14}/>
                     <span>
                       {selectedIds.size > 0 
-                        ? `Sao Chép Đã Chọn (${selectedIds.size})` 
+                        ? `Sao Chép (${selectedIds.size})` 
                         : `Sao Chép Tất Cả (${displayedDomains.length})`}
                     </span>
                   </button>
 
                   <button 
+                    onClick={exportToCSV} 
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all hover:scale-105"
+                  >
+                    <Download size={14}/>
+                    <span>Xuất CSV</span>
+                  </button>
+
+                  <div className="h-4 w-px bg-slate-800 mx-0.5 hidden sm:block"></div>
+
+                  <button 
                     onClick={() => startCrawl(true)} 
                     disabled={isProcessing} 
-                    className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 px-3.5 py-2.5 rounded-xl text-xs font-black border border-blue-500/30 flex items-center gap-2 transition-all hover:scale-105"
+                    className="bg-slate-800 hover:bg-slate-700 text-blue-300 px-3 py-2 rounded-xl text-xs font-extrabold border border-slate-700 flex items-center gap-1.5 transition-all"
+                    title="Thêm từ khóa hoặc quét thêm từ nguồn khác"
                   >
-                    {isProcessing ? <Loader2 size={15} className="animate-spin"/> : <PlusCircle size={15}/>}
+                    {isProcessing ? <Loader2 size={13} className="animate-spin"/> : <PlusCircle size={13}/>}
                     <span>Quét Thêm</span>
                   </button>
 
                   <button 
                     onClick={resetTool} 
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3.5 py-2.5 rounded-xl text-xs font-black border border-slate-700 flex items-center gap-2 transition-all hover:scale-105"
+                    className="bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white px-2.5 py-2 rounded-xl text-xs font-extrabold border border-slate-800 transition-all"
+                    title="Xóa kết quả hiện tại và thực hiện quét mới"
                   >
-                    <RotateCcw size={15}/>
-                    <span>Quét Lại</span>
-                  </button>
-
-                  <button 
-                    onClick={exportToCSV} 
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-indigo-900/30 flex items-center gap-2 transition-all hover:scale-105"
-                  >
-                    <Download size={15}/>
-                    <span>Xuất CSV</span>
+                    <RotateCcw size={13}/>
                   </button>
                 </div>
               </div>
             </div>
+
+            {/* LIVE CHECKING RUNNING BANNER */}
+            {(isLiveChecking || isViewDnsChecking) && (
+              <div className="bg-gradient-to-r from-cyan-950/90 via-slate-900 to-purple-950/90 border border-cyan-500/40 p-3.5 sm:p-4 rounded-2xl flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top duration-300 shadow-xl">
+                <div className="flex items-center gap-3">
+                  <Loader2 size={20} className="text-cyan-400 animate-spin flex-shrink-0" />
+                  <div>
+                    <div className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
+                      <span>{isLiveChecking ? '⚡ Đang quét Live DNS / WHOIS cho các tên miền...' : '🌐 Đang quét lịch sử IP ViewDNS.info...'}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      {isLiveChecking 
+                        ? 'Kiểm tra RDAP & Google DoH để xác nhận chính xác domain đã hết hạn (NXDOMAIN)...' 
+                        : 'Kiểm tra lịch sử thay đổi IP server của tên miền trên ViewDNS...'}
+                    </div>
+                  </div>
+                </div>
+                <div className="px-3 py-1 bg-cyan-900/50 border border-cyan-700/60 rounded-xl text-[11px] font-mono font-bold text-cyan-300 whitespace-nowrap">
+                  Đang xử lý
+                </div>
+              </div>
+            )}
 
             {/* 3. COLLAPSIBLE TRAFFIC CHART SECTION */}
             {showTrafficChart && (
