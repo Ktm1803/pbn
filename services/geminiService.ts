@@ -51,3 +51,17 @@ export const checkWaybackBatch = async (domains: string[]): Promise<Record<strin
     return {};
   }
 };
+
+export const fetchGoogleSuggestKeywords = async (keyword: string, lang: string = 'vi'): Promise<string[]> => {
+  try {
+    const response = await fetch(`/api/google-suggest?q=${encodeURIComponent(keyword)}&hl=${encodeURIComponent(lang)}`);
+    const data = await response.json();
+    if (data.success && Array.isArray(data.suggestions)) {
+      return data.suggestions;
+    }
+    return [];
+  } catch (error) {
+    console.error("Google suggest fetch failed:", error);
+    return [];
+  }
+};

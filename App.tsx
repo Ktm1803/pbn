@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { StepIndicator } from './components/StepIndicator';
 import { FilterControl } from './components/FilterControl';
 import { Step, DomainEntity, DomainStatus, FilterConfig, User, PLANS, MarketplaceType, evaluateGrowthPotential, calculateSEODifficulty } from './types';
-import { analyzeDomainBatch, generateMockDomains, checkWaybackBatch } from './services/geminiService';
+import { analyzeDomainBatch, generateMockDomains, checkWaybackBatch, fetchGoogleSuggestKeywords } from './services/geminiService';
 import { getCurrentUser, logout, submitBugReport } from './services/authService';
 import { AuthForm, SubscriptionPlan, AdminDashboard } from './components/AuthComponents';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
@@ -11,7 +11,7 @@ import {
   Play, Settings, CheckCircle2, AlertTriangle, Download, RefreshCw, Search, Bot, 
   Globe, ShieldCheck, Filter, PlusCircle, DollarSign, History, ExternalLink, 
   ShoppingCart, CheckSquare, Square, X, XCircle, LogOut, Smartphone, Shield, 
-  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive, Flame, Sparkles, Server, PieChart as PieChartIcon, BarChart3
+  Gavel, Zap, Clock, Activity, Database, HardDrive, Layers, Trash2, TrendingUp, Plus, Eye, Loader2, Bug, ShieldAlert, RotateCcw, Send, MessageSquare, Copy, Archive, Flame, Sparkles, Server, PieChart as PieChartIcon, BarChart3, Sun, Moon, Monitor
 } from 'lucide-react';
 
 const REG_FEES: Record<string, number> = {
@@ -207,6 +207,56 @@ export default function App() {
   const [singleCopiedId, setSingleCopiedId] = useState<string | null>(null);
   const [isLiveChecking, setIsLiveChecking] = useState(false);
   const [isViewDnsChecking, setIsViewDnsChecking] = useState(false);
+  
+  const [suggestKeywords, setSuggestKeywords] = useState<string[]>([]);
+  const [selectedSuggestKeywords, setSelectedSuggestKeywords] = useState<string[]>([]);
+  const [isFetchingSuggest, setIsFetchingSuggest] = useState(false);
+
+  const handleFetchGoogleSuggest = async (kw?: string) => {
+    const target = kw !== undefined ? kw : seedKeyword;
+    if (!target.trim()) return;
+    setIsFetchingSuggest(true);
+    try {
+      const list = await fetchGoogleSuggestKeywords(target.trim());
+      setSuggestKeywords(list);
+      if (list.length > 0) {
+        addLog(`💡 Google Suggest: Đã tìm thấy ${list.length} từ khóa gợi ý liên quan cho "${target.trim()}"`);
+      }
+    } catch (err) {
+      console.error("Google suggest fetch error:", err);
+    } finally {
+      setIsFetchingSuggest(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!seedKeyword.trim()) {
+      setSuggestKeywords([]);
+      setSelectedSuggestKeywords([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      handleFetchGoogleSuggest(seedKeyword);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [seedKeyword]);
+  
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const saved = localStorage.getItem('pbn_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return 'dark';
+  });
+  const [showThemeMenu, setShowThemeMenu] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('pbn_theme', theme);
+    if (theme === 'light') {
+      document.documentElement.classList.add('light-theme');
+    } else {
+      document.documentElement.classList.remove('light-theme');
+    }
+  }, [theme]);
+
   const MAX_STORAGE = 1000000;
 
   const handleBulkTldAdd = (e?: React.FormEvent) => {
@@ -319,9 +369,17 @@ export default function App() {
     addLog(`${isAppending ? 'Đang quét thêm' : 'Khởi động engine quét'} ${scanLimit.toLocaleString()} domain...`);
     
     try {
+      const activeKeywords = Array.from(new Set([seedKeyword, ...selectedSuggestKeywords])).filter(Boolean);
+      if (selectedSuggestKeywords.length > 0) {
+        addLog(`💡 Google Suggest Engine: Mở rộng truy quét với ${activeKeywords.length} từ khóa (${activeKeywords.join(', ')})`);
+      }
+
       let realisticNames: string[] = [];
       try {
-        realisticNames = await generateMockDomains(seedKeyword);
+        const seedResults = await Promise.all(
+          activeKeywords.slice(0, 5).map(kw => generateMockDomains(kw))
+        );
+        realisticNames = Array.from(new Set(seedResults.flat())).filter(Boolean);
       } catch (err) {
         console.error("Failed mock domain generation:", err);
       }
@@ -1329,9 +1387,112 @@ export default function App() {
              <h2 className="text-2xl sm:text-3xl font-black mb-6 sm:mb-8 flex items-center gap-3 sm:gap-4 text-white"><Database className="text-blue-500"/> Thu thập PBN</h2>
              <div className="space-y-6 sm:space-y-8">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                  <div className="sm:col-span-2">
-                    <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest">Từ khóa chủ đề</label>
-                    <input type="text" value={seedKeyword} onChange={e => setSeedKeyword(e.target.value)} className="w-full bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 outline-none text-base sm:text-lg font-bold text-white focus:border-blue-500 transition-all shadow-inner" placeholder="VD: marketing, casino, travel..."/>
+                  <div className="sm:col-span-2 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                        Từ khóa chủ đề (Root Keyword)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => handleFetchGoogleSuggest()}
+                        disabled={isFetchingSuggest || !seedKeyword.trim()}
+                        className="text-[11px] font-extrabold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 transition-all bg-amber-950/60 hover:bg-amber-900/80 px-2.5 py-1 rounded-xl border border-amber-800/60 disabled:opacity-50"
+                        title="Bấm để tải lại từ khóa gợi ý từ Google Suggest"
+                      >
+                        {isFetchingSuggest ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} className="text-amber-400" />}
+                        <span>Google Suggest {suggestKeywords.length > 0 && `(${suggestKeywords.length})`}</span>
+                      </button>
+                    </div>
+
+                    <div className="relative">
+                      <input 
+                        type="text" 
+                        value={seedKeyword} 
+                        onChange={e => setSeedKeyword(e.target.value)} 
+                        className="w-full bg-slate-950 p-4 sm:p-5 rounded-2xl border border-slate-800 outline-none text-base sm:text-lg font-bold text-white focus:border-blue-500 transition-all shadow-inner" 
+                        placeholder="VD: marketing, casino, travel, crypto..."
+                      />
+                      {isFetchingSuggest && (
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2 text-xs text-amber-400 font-bold bg-slate-900/90 px-3 py-1.5 rounded-xl border border-amber-500/30">
+                          <Loader2 size={13} className="animate-spin" />
+                          <span>Đang lấy Google Suggest...</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* GOOGLE SUGGEST SUGGESTIONS BOX */}
+                    {suggestKeywords.length > 0 && (
+                      <div className="mt-3 bg-slate-950/80 border border-slate-800/90 p-3.5 sm:p-4 rounded-2xl space-y-2.5 animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 text-xs font-black text-amber-400">
+                            <Sparkles size={13} className="fill-amber-400" />
+                            <span>Gợi ý từ khóa liên quan Google Suggest ({suggestKeywords.length}):</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (selectedSuggestKeywords.length === suggestKeywords.length) {
+                                  setSelectedSuggestKeywords([]);
+                                } else {
+                                  setSelectedSuggestKeywords([...suggestKeywords]);
+                                }
+                              }}
+                              className="text-[10px] font-bold text-blue-400 hover:text-white underline underline-offset-2"
+                            >
+                              {selectedSuggestKeywords.length === suggestKeywords.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto custom-scrollbar pr-1">
+                          {suggestKeywords.map((kw) => {
+                            const isSelected = selectedSuggestKeywords.includes(kw);
+                            return (
+                              <button
+                                key={kw}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSelectedSuggestKeywords(prev => prev.filter(k => k !== kw));
+                                  } else {
+                                    setSelectedSuggestKeywords(prev => [...prev, kw]);
+                                  }
+                                }}
+                                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border ${
+                                  isSelected
+                                    ? 'bg-gradient-to-r from-blue-900/80 to-indigo-900/80 border-blue-500 text-blue-200 shadow-md scale-[1.02]'
+                                    : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:border-slate-700 hover:text-white hover:bg-slate-800'
+                                }`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-blue-400 animate-pulse' : 'bg-slate-600'}`}></span>
+                                <span>{kw}</span>
+                                {isSelected ? (
+                                  <CheckCircle2 size={12} className="text-blue-400 ml-0.5" />
+                                ) : (
+                                  <Plus size={11} className="text-slate-500 hover:text-white ml-0.5" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {selectedSuggestKeywords.length > 0 && (
+                          <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px] font-bold text-slate-400">
+                            <span className="text-emerald-400 flex items-center gap-1">
+                              <CheckCircle2 size={12} /> Đã chọn {selectedSuggestKeywords.length} từ khóa gợi ý để mở rộng quy trình truy quét PBN.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSuggestKeywords([])}
+                              className="text-slate-500 hover:text-slate-300 text-[10px]"
+                            >
+                              Xóa lựa chọn
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs font-bold text-slate-500 mb-2 block uppercase tracking-widest">Giới hạn quét</label>
@@ -2461,6 +2622,67 @@ export default function App() {
                 <button onClick={() => setShowBugReport(true)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs font-black border border-slate-700 flex items-center gap-1.5 transition-all hover:scale-105" title="Báo cáo lỗi">
                     <Bug size={14}/> <span className="hidden md:inline">Báo cáo lỗi</span>
                 </button>
+
+                {/* Theme Switcher Menu */}
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowThemeMenu(!showThemeMenu)}
+                    className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black border transition-all flex items-center gap-1.5 hover:scale-105 ${
+                      theme === 'light' 
+                        ? 'bg-amber-100 text-amber-950 border-amber-300 shadow-sm' 
+                        : 'bg-slate-800 text-amber-400 border-slate-700 hover:border-amber-500/50'
+                    }`}
+                    title="Chuyển đổi Chế độ Sáng / Tối (Light/Dark Mode)"
+                  >
+                    {theme === 'light' ? (
+                      <Sun size={15} className="text-amber-600 fill-amber-500 animate-spin-slow" />
+                    ) : (
+                      <Moon size={15} className="text-amber-400 fill-amber-400/20" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {theme === 'light' ? 'Chế độ Sáng' : 'Chế độ Tối'}
+                    </span>
+                  </button>
+
+                  {showThemeMenu && (
+                    <div className="absolute right-0 mt-2 w-52 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+                      <div className="px-3 py-1.5 text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center justify-between">
+                        <span>Chế độ giao diện</span>
+                        <span className="text-[9px] text-amber-400 font-normal">Tự động lưu</span>
+                      </div>
+
+                      <button
+                        onClick={() => { setTheme('dark'); setShowThemeMenu(false); }}
+                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                          theme === 'dark' 
+                            ? 'bg-blue-600 text-white shadow-md' 
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Moon size={14} className={theme === 'dark' ? 'text-white' : 'text-blue-400'} />
+                          Chế độ Tối (Dark)
+                        </span>
+                        {theme === 'dark' && <CheckCircle2 size={14} />}
+                      </button>
+
+                      <button
+                        onClick={() => { setTheme('light'); setShowThemeMenu(false); }}
+                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all mt-1 ${
+                          theme === 'light' 
+                            ? 'bg-amber-500 text-white shadow-md' 
+                            : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Sun size={14} className={theme === 'light' ? 'text-white' : 'text-amber-400'} />
+                          Chế độ Sáng (Light)
+                        </span>
+                        {theme === 'light' && <CheckCircle2 size={14} />}
+                      </button>
+                    </div>
+                  )}
+                </div>
             </div>
             {currentUser.role === 'admin' && (
                 <button onClick={() => setShowAdminDashboard(true)} className="bg-red-600 text-white p-2 sm:p-2.5 rounded-xl shadow-lg shadow-red-900/20 hover:bg-red-500 transition-all hover:scale-110 border border-red-500/50"><Shield size={18}/></button>

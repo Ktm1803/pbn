@@ -38,6 +38,66 @@ async function startServer() {
     }
   });
 
+  app.get("/api/google-suggest", async (req, res) => {
+    try {
+      const keyword = (req.query.q as string || "").trim();
+      const lang = (req.query.hl as string || "vi").trim();
+      if (!keyword) {
+        return res.json({ success: true, suggestions: [] });
+      }
+
+      const googleUrl = `https://suggestqueries.google.com/complete/search?client=firefox&hl=${encodeURIComponent(lang)}&q=${encodeURIComponent(keyword)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      let suggestions: string[] = [];
+
+      try {
+        const googleRes = await fetch(googleUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (googleRes.ok) {
+          const data = await googleRes.json();
+          if (Array.isArray(data) && Array.isArray(data[1])) {
+            suggestions = data[1].map((s: any) => String(s).trim()).filter(Boolean);
+          }
+        }
+      } catch (err) {
+        clearTimeout(timeoutId);
+        console.warn("Direct Google suggest call failed, falling back to Gemini AI:", err);
+      }
+
+      // If Google Suggest returned fewer than 5 keywords, enrich/fallback with Gemini AI
+      if (suggestions.length < 5) {
+        try {
+          const prompt = `Cho từ khóa gốc "${keyword}", hãy gợi ý 10 từ khóa tìm kiếm liên quan SEO/PBN phổ biến nhất trên Google bằng tiếng Việt. Trả về danh sách phân cách bởi dấu phẩy, không chứa số thứ tự hay giải thích.`;
+          const aiResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+          });
+          const aiSuggestions = (aiResponse.text || "")
+            .split(/[,;\n]/)
+            .map(s => s.replace(/^[0-9+.\s-]+/, '').trim())
+            .filter(Boolean);
+
+          suggestions = Array.from(new Set([...suggestions, ...aiSuggestions]));
+        } catch (aiErr) {
+          console.warn("AI suggest enrichment failed:", aiErr);
+        }
+      }
+
+      res.json({ success: true, keyword, suggestions });
+    } catch (error) {
+      console.error("Google suggest endpoint error:", error);
+      res.json({ success: false, suggestions: [] });
+    }
+  });
+
   app.post("/api/analyze-domains", async (req, res) => {
     try {
       const { domains, config } = req.body;
