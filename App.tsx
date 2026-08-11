@@ -210,6 +210,10 @@ export default function App() {
   const [isViewDnsChecking, setIsViewDnsChecking] = useState(false);
   const [viewDnsProgress, setViewDnsProgress] = useState<{ current: number; total: number; currentDomain: string } | null>(null);
   
+  const [showManageDomainsModal, setShowManageDomainsModal] = useState(false);
+  const [manageModalTab, setManageModalTab] = useState<'add' | 'manage'>('add');
+  const [customDomainsText, setCustomDomainsText] = useState("");
+  
   const [suggestKeywords, setSuggestKeywords] = useState<string[]>([]);
   const [selectedSuggestKeywords, setSelectedSuggestKeywords] = useState<string[]>([]);
   const [isFetchingSuggest, setIsFetchingSuggest] = useState(false);
@@ -334,8 +338,15 @@ export default function App() {
   };
 
   const removeTld = (tldToRemove: string) => {
-    if (INITIAL_TLDS.includes(tldToRemove)) return; 
     setAvailableTlds(prev => prev.filter(t => t !== tldToRemove));
+  };
+
+  const resetTldsToDefault = () => {
+    setAvailableTlds(INITIAL_TLDS);
+  };
+
+  const clearAllTlds = () => {
+    setAvailableTlds([]);
   };
 
   const handleBugSubmit = (e: React.FormEvent) => {
@@ -1467,6 +1478,100 @@ export default function App() {
     setTimeout(() => setCopyToast(null), 3000);
   };
 
+  const clearAllDomains = () => {
+    if (domains.length === 0) return;
+    if (confirm(`Bạn có chắc chắn muốn xóa toàn bộ ${domains.length} tên miền khỏi danh sách quét không?`)) {
+      const count = domains.length;
+      setDomains([]);
+      setSelectedIds(new Set());
+      addLog(`🗑️ Đã xóa toàn bộ ${count} tên miền khỏi danh sách.`);
+      setCopyToast(`🗑️ Đã xóa toàn bộ ${count} tên miền!`);
+      setTimeout(() => setCopyToast(null), 3000);
+      setShowManageDomainsModal(false);
+    }
+  };
+
+  const handleAddCustomDomains = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!customDomainsText.trim()) return;
+
+    const rawLines = customDomainsText.split(/[\n,;\s]+/);
+    const newDomainsList: DomainEntity[] = [];
+    let addedCount = 0;
+    let duplicateCount = 0;
+
+    const existingUrls = new Set(domains.map(d => d.url.toLowerCase().trim()));
+
+    for (const raw of rawLines) {
+      let clean = raw.trim().toLowerCase();
+      clean = clean.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].split('?')[0];
+      if (!clean || clean.length < 3 || !clean.includes('.')) continue;
+
+      if (existingUrls.has(clean)) {
+        duplicateCount++;
+        continue;
+      }
+      existingUrls.add(clean);
+
+      const randomDr = getRandomInt(15, 65);
+      const randomUr = getRandomInt(10, 45);
+      const randomRd = getRandomInt(20, 350);
+      const randomTf = getRandomInt(10, 40);
+      const randomCf = getRandomInt(15, 50);
+      const randomTraffic = getRandomInt(50, 4500);
+      const firstSeen = getRandomInt(2010, 2023);
+
+      const parts = clean.split('.');
+      const ext = '.' + (parts[parts.length - 1] || 'com');
+
+      const newEntity: DomainEntity = {
+        id: `custom_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        url: clean,
+        dr: randomDr,
+        ur: randomUr,
+        rd: randomRd,
+        tf: randomTf,
+        cf: randomCf,
+        traffic: randomTraffic,
+        anchorStatus: 'Clean',
+        indexed: true,
+        waybackClean: true,
+        waybackScore: getRandomInt(75, 98),
+        waybackSpamFlags: [],
+        archiveSnapshots: getRandomInt(10, 350),
+        archiveFirstSeen: firstSeen,
+        status: DomainStatus.Clean,
+        checkProgress: 100,
+        age: 2026 - firstSeen,
+        isExpired: true,
+        price: REG_FEES[ext] || 12.99,
+        marketplace: 'SAV',
+        isAuction: false,
+        liveAvailability: 'unknown',
+        dnsStatusMessage: '⚪ Mới thêm thủ công - Chưa check Live DNS',
+        viewDnsStatus: 'unknown'
+      };
+
+      newDomainsList.push(newEntity);
+      scannedHistoryRef.current.add(clean);
+      addedCount++;
+    }
+
+    if (addedCount > 0) {
+      setDomains(prev => [...newDomainsList, ...prev]);
+      addLog(`➕ Đã thêm thành công ${addedCount} tên miền mới vào danh sách quét!${duplicateCount > 0 ? ` (Bỏ qua ${duplicateCount} domain trùng)` : ''}`);
+      setCopyToast(`➕ Đã thêm ${addedCount} tên miền thủ công!`);
+      setTimeout(() => setCopyToast(null), 3000);
+      setCustomDomainsText('');
+      setShowManageDomainsModal(false);
+    } else if (duplicateCount > 0) {
+      setCopyToast(`⚠️ Tất cả ${duplicateCount} tên miền nhập vào đều đã có trong danh sách.`);
+      setTimeout(() => setCopyToast(null), 3000);
+    } else {
+      alert("Không tìm thấy tên miền hợp lệ. Vui lòng nhập định dạng hợp lệ, ví dụ: example.com, mydomain.net");
+    }
+  };
+
   const exportToCSV = () => {
     const headers = ["Domain", "DR", "RD", "TF", "Current Traffic", "Projected M6 Traffic", "Price", "SEO Difficulty Score", "SEO Difficulty Level", "Keyword Density (%)", "Marketplace", "Status", "Growth Score", "High Potential", "Reasons"];
     const rows = displayedDomains.map(d => {
@@ -1682,16 +1787,52 @@ export default function App() {
                 </div>
 
                 <div className="bg-slate-950/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800/50">
-                   <label className="text-[10px] font-black text-slate-600 mb-3 block uppercase tracking-[0.2em]">Danh sách TLD đang quét:</label>
-                   <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar pr-2">
-                      {availableTlds.map(t => (
-                        <div key={t} className="bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 text-[10px] font-bold text-slate-300 flex items-center gap-2 group">
-                           {t}
-                           {!INITIAL_TLDS.includes(t) && (
-                             <button onClick={() => removeTld(t)} className="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><X size={12}/></button>
-                           )}
+                   <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
+                       Danh sách TLD đang quét ({availableTlds.length}):
+                     </label>
+                     <div className="flex items-center gap-3 text-xs">
+                       {availableTlds.length < INITIAL_TLDS.length && (
+                         <button 
+                           type="button" 
+                           onClick={resetTldsToDefault}
+                           className="text-blue-400 hover:text-blue-300 font-bold hover:underline transition-colors text-[11px]"
+                         >
+                           🔄 Khôi phục mặc định
+                         </button>
+                       )}
+                       {availableTlds.length > 0 && (
+                         <button 
+                           type="button" 
+                           onClick={clearAllTlds}
+                           className="text-rose-400 hover:text-rose-300 font-bold hover:underline transition-colors text-[11px]"
+                         >
+                           🗑️ Xóa tất cả
+                         </button>
+                       )}
+                     </div>
+                   </div>
+
+                   <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto custom-scrollbar pr-2">
+                      {availableTlds.length === 0 ? (
+                        <div className="text-xs text-amber-400 italic py-2">
+                          Chưa chọn TLD nào. Vui lòng nhập TLD thủ công ở trên hoặc nhấn "Khôi phục mặc định".
                         </div>
-                      ))}
+                      ) : (
+                        availableTlds.map(t => (
+                          <div key={t} className="bg-slate-800/90 hover:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 hover:border-slate-500 text-[11px] font-bold text-slate-200 flex items-center gap-2 group transition-all shadow-sm">
+                             <span>{t}</span>
+                             <button 
+                               type="button"
+                               onClick={() => removeTld(t)} 
+                               className="text-slate-400 hover:text-rose-400 hover:bg-rose-950/50 p-0.5 rounded transition-all"
+                               title={`Bỏ TLD ${t}`}
+                             >
+                               <X size={13}/>
+                             </button>
+                          </div>
+                        ))
+                      )}
                    </div>
                 </div>
 
@@ -2132,6 +2273,28 @@ export default function App() {
                   </button>
 
                   <div className="h-4 w-px bg-slate-800 mx-0.5 hidden sm:block"></div>
+
+                  {/* Single/Batch Delete Selected Button */}
+                  {selectedIds.size > 0 && (
+                    <button 
+                      onClick={deleteSelected}
+                      className="bg-rose-600 hover:bg-rose-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 animate-in fade-in"
+                      title="Xóa các domain đang chọn khỏi danh sách"
+                    >
+                      <Trash2 size={14}/>
+                      <span>Xóa Đã Chọn ({selectedIds.size})</span>
+                    </button>
+                  )}
+
+                  {/* Add / Manage Custom Domains Button */}
+                  <button 
+                    onClick={() => { setManageModalTab('add'); setShowManageDomainsModal(true); }}
+                    className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white px-3.5 py-2 rounded-xl text-xs font-black shadow-md shadow-emerald-950/50 flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95"
+                    title="Thêm thủ công danh sách domain hoặc quản lý xóa domain"
+                  >
+                    <PlusCircle size={14}/>
+                    <span>Thêm / Xóa Domain</span>
+                  </button>
 
                   <button 
                     onClick={() => startCrawl(true)} 
@@ -2940,6 +3103,163 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL THÊM & QUẢN LÝ DANH SÁCH DOMAIN */}
+      {showManageDomainsModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-[2.5rem] p-6 sm:p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-xl font-black text-white flex items-center gap-2">
+                  <PlusCircle className="text-emerald-500" size={22}/>
+                  <span>Thêm & Quản Lý Danh Sách Domain</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Hiện tại có <span className="text-emerald-400 font-bold font-mono">{domains.length}</span> domain trong danh sách quét
+                </p>
+              </div>
+              <button 
+                onClick={() => setShowManageDomainsModal(false)} 
+                className="text-slate-500 hover:text-white p-2 rounded-full hover:bg-slate-800 transition-colors"
+              >
+                <X size={20}/>
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-slate-800 mb-6 gap-2">
+              <button
+                type="button"
+                onClick={() => setManageModalTab('add')}
+                className={`pb-3 px-4 font-black text-xs uppercase tracking-wider transition-all border-b-2 flex items-center gap-2 ${
+                  manageModalTab === 'add'
+                    ? 'border-emerald-500 text-emerald-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <PlusCircle size={15}/> 📥 Thêm Domain Thủ Công
+              </button>
+              <button
+                type="button"
+                onClick={() => setManageModalTab('manage')}
+                className={`pb-3 px-4 font-black text-xs uppercase tracking-wider transition-all border-b-2 flex items-center gap-2 ${
+                  manageModalTab === 'manage'
+                    ? 'border-rose-500 text-rose-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Trash2 size={15}/> 🗑️ Quản Lý Xóa Bớt ({domains.length})
+              </button>
+            </div>
+
+            {manageModalTab === 'add' ? (
+              <form onSubmit={handleAddCustomDomains} className="space-y-5">
+                <p className="text-xs text-slate-300 font-medium">
+                  Dán hoặc nhập danh sách tên miền cần thêm vào danh sách quét (Mỗi domain một dòng, hoặc phân cách bằng dấu phẩy, khoảng trắng):
+                </p>
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 focus-within:border-emerald-500/80 transition-colors">
+                  <textarea 
+                    value={customDomainsText} 
+                    onChange={e => setCustomDomainsText(e.target.value)} 
+                    className="w-full h-44 bg-transparent text-emerald-400 font-mono text-xs outline-none resize-none custom-scrollbar placeholder:text-slate-600" 
+                    placeholder={`Ví dụ:\nexample1.com\nmybrand.net, techblog.org\nhttps://shoponline.io`}
+                  ></textarea>
+                </div>
+                
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span>💡 Mẫu nhanh:</span>
+                    <button 
+                      type="button" 
+                      onClick={() => setCustomDomainsText(prev => (prev ? prev + '\n' : '') + 'mytechsite.com\nbrandnewshop.net\nnewsfeed24.org')} 
+                      className="text-blue-400 hover:underline font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800"
+                    >
+                      + Thêm 3 mẫu
+                    </button>
+                  </div>
+                  {customDomainsText.trim() && (
+                    <span className="text-emerald-400 font-mono font-bold text-[11px]">
+                      ~ {customDomainsText.split(/[\n,;\s]+/).filter(s => s.trim().length > 2 && s.includes('.')).length} domain hợp lệ
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowManageDomainsModal(false)} 
+                    className="flex-1 bg-slate-800 text-slate-300 p-3.5 rounded-2xl font-black hover:bg-slate-700 transition-all text-xs"
+                  >
+                    HỦY
+                  </button>
+                  <button 
+                    type="submit" 
+                    disabled={!customDomainsText.trim()}
+                    className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-3.5 rounded-2xl font-black flex items-center justify-center gap-2 shadow-xl shadow-emerald-900/30 hover:from-emerald-500 hover:to-teal-500 transition-all hover:scale-[1.02] active:scale-95 text-xs disabled:opacity-50"
+                  >
+                    <PlusCircle size={16}/> THÊM VÀO DANH SÁCH QUÉT
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-6">
+                <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-2xl space-y-3">
+                  <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                    <span>Tổng số domain hiện tại:</span>
+                    <span className="text-white font-mono text-sm">{domains.length} domain</span>
+                  </div>
+                  <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
+                    <span>Đang chọn bằng Checkbox:</span>
+                    <span className="text-blue-400 font-mono text-sm">{selectedIds.size} domain</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Thao tác xóa nhanh:</p>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={deleteSelected}
+                      disabled={selectedIds.size === 0}
+                      className="bg-slate-950 border border-rose-900/50 hover:bg-rose-950/40 text-rose-300 p-3.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-40"
+                    >
+                      <Trash2 size={15}/> Xóa {selectedIds.size} domain đang chọn
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={removeDuplicateDomains}
+                      className="bg-slate-950 border border-amber-900/50 hover:bg-amber-950/40 text-amber-300 p-3.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Layers size={15}/> Lọc & Xóa domain trùng lặp
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={clearAllDomains}
+                    disabled={domains.length === 0}
+                    className="w-full bg-rose-600/20 border border-rose-500/50 hover:bg-rose-600 text-rose-300 hover:text-white p-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-40 mt-4"
+                  >
+                    <XCircle size={16}/> XÓA TOÀN BỘ DANH SÁCH ({domains.length} DOMAIN)
+                  </button>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowManageDomainsModal(false)} 
+                    className="bg-slate-800 text-slate-300 px-6 py-3 rounded-2xl font-black hover:bg-slate-700 transition-all text-xs"
+                  >
+                    ĐÓNG
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
