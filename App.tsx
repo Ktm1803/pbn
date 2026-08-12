@@ -16,11 +16,16 @@ import {
 
 const REG_FEES: Record<string, number> = {
   '.com': 10.28, '.net': 11.98, '.org': 9.68, '.info': 3.98, '.co': 23.98, '.io': 39.98,
+  '.ai': 69.98, '.tech': 2.99, '.online': 1.99, '.store': 1.99, '.app': 14.98, '.dev': 14.98,
   '.co.net': 15.00, '.uk.net': 12.99, '.us.net': 12.99, '.co.org': 15.00, '.uk.org': 9.50, 
-  '.jp.net': 14.50, '.jp.co': 40.00, '.co.jp': 40.00, '.xyz': 0.99, '.site': 1.99
+  '.jp.net': 14.50, '.jp.co': 40.00, '.co.jp': 40.00, '.xyz': 0.99, '.site': 1.99,
+  '.me': 9.98, '.biz': 8.98, '.us': 7.98, '.uk': 6.98, '.co.uk': 6.98, '.ca': 11.98,
+  '.de': 8.98, '.asia': 12.98, '.cc': 9.98, '.tv': 29.98, '.mobi': 14.98, '.shop': 2.99,
+  '.club': 2.99, '.vip': 4.99, '.live': 3.99, '.space': 1.99, '.agency': 19.98
 };
 
-const INITIAL_TLDS = Object.keys(REG_FEES);
+const ALL_MARKET_TLDS = Object.keys(REG_FEES);
+const INITIAL_TLDS = ALL_MARKET_TLDS;
 const getRandomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 interface TrafficForecastSparklineProps {
@@ -381,6 +386,13 @@ export default function App() {
     }
     addLog(`${isAppending ? 'Đang quét thêm' : 'Khởi động engine quét'} ${scanLimit.toLocaleString()} domain...`);
     
+    const activeScanTlds = availableTlds.length > 0 ? availableTlds : ALL_MARKET_TLDS;
+    if (availableTlds.length === 0) {
+      addLog(`🌐 Danh sách TLD trống: Tự động lọc & quét TOÀN BỘ ${ALL_MARKET_TLDS.length} loại TLD hiện có trên thị trường...`);
+    } else {
+      addLog(`🌐 Quét với ${availableTlds.length} TLD được chỉ định trong danh sách...`);
+    }
+
     try {
       const activeKeywords = Array.from(new Set([seedKeyword, ...selectedSuggestKeywords])).filter(Boolean);
       if (selectedSuggestKeywords.length > 0) {
@@ -435,7 +447,7 @@ export default function App() {
           do {
             const rawNameRoot = realisticNames[getRandomInt(0, realisticNames.length - 1)]?.split('.')[0] || seedKeyword;
             const nameRoot = filterConfig.excludeHyphenDomains ? rawNameRoot.replace(/-/g, '') : rawNameRoot;
-            randomTLD = availableTlds[getRandomInt(0, availableTlds.length - 1)] || '.com';
+            randomTLD = activeScanTlds[getRandomInt(0, activeScanTlds.length - 1)] || '.com';
             
             const extraTag = attempts > 0 ? `${getRandomInt(10, 99999)}` : '';
             const suffix = (Math.random() > 0.6 || attempts > 0) ? `${getRandomInt(1, 99)}${extraTag}` : '';
@@ -868,6 +880,23 @@ export default function App() {
 
     return list;
   }, [cleanDomainsWithGrowth, filterMode, trafficFilter, searchQuery, selectedTldFilter, sortBy]);
+
+  const displayedDomainTlds = useMemo(() => {
+    const set = new Set<string>();
+    if (availableTlds.length > 0) {
+      availableTlds.forEach(t => set.add(t));
+    }
+    domains.forEach(d => {
+      const parts = d.url.toLowerCase().split('.');
+      if (parts.length > 1) {
+        set.add('.' + parts.slice(1).join('.'));
+      }
+    });
+    if (set.size === 0) {
+      ALL_MARKET_TLDS.forEach(t => set.add(t));
+    }
+    return Array.from(set).sort();
+  }, [availableTlds, domains]);
   
   const copySelectedDomains = async () => {
     const targetDomains = selectedIds.size > 0 
@@ -1789,7 +1818,7 @@ export default function App() {
                 <div className="bg-slate-950/50 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800/50">
                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
-                       Danh sách TLD đang quét ({availableTlds.length}):
+                       Danh sách TLD đang quét ({availableTlds.length > 0 ? availableTlds.length : `Tất cả ${ALL_MARKET_TLDS.length} TLD thị trường`}):
                      </label>
                      <div className="flex items-center gap-3 text-xs">
                        {availableTlds.length < INITIAL_TLDS.length && (
@@ -1807,19 +1836,41 @@ export default function App() {
                            onClick={clearAllTlds}
                            className="text-rose-400 hover:text-rose-300 font-bold hover:underline transition-colors text-[11px]"
                          >
-                           🗑️ Xóa tất cả
+                           🗑️ Xóa tất cả TLD
                          </button>
                        )}
                      </div>
                    </div>
 
-                   <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto custom-scrollbar pr-2">
-                      {availableTlds.length === 0 ? (
-                        <div className="text-xs text-amber-400 italic py-2">
-                          Chưa chọn TLD nào. Vui lòng nhập TLD thủ công ở trên hoặc nhấn "Khôi phục mặc định".
-                        </div>
-                      ) : (
-                        availableTlds.map(t => (
+                   {availableTlds.length === 0 ? (
+                     <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-cyan-950/80 border border-emerald-500/50 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+                       <div className="flex items-center gap-3">
+                         <div className="w-9 h-9 rounded-xl bg-emerald-950/90 border border-emerald-500/50 flex items-center justify-center flex-shrink-0">
+                           <Globe size={20} className="text-emerald-400 animate-pulse" />
+                         </div>
+                         <div>
+                           <div className="text-xs sm:text-sm font-black text-emerald-300 flex items-center gap-2 uppercase tracking-wide">
+                             <span>🌐 Chế Độ Tự Động: Quét TẤT CẢ TLDs Trên Thị Trường</span>
+                             <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono text-[10px] font-bold">
+                               {ALL_MARKET_TLDS.length} loại đuôi
+                             </span>
+                           </div>
+                           <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
+                             Danh sách TLD đang để trống. Hệ thống sẽ <b>tự động quét và lọc tất cả các tên miền hiện có trên thị trường</b> (.com, .net, .org, .io, .ai, .tech, .app, .xyz, .co, .de, .uk, .ca, .shop...)
+                           </p>
+                         </div>
+                       </div>
+                       <button 
+                         type="button" 
+                         onClick={resetTldsToDefault}
+                         className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md transition-all whitespace-nowrap self-end sm:self-center"
+                       >
+                         🔄 Nạp danh sách TLD mặc định
+                       </button>
+                     </div>
+                   ) : (
+                     <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto custom-scrollbar pr-2">
+                        {availableTlds.map(t => (
                           <div key={t} className="bg-slate-800/90 hover:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 hover:border-slate-500 text-[11px] font-bold text-slate-200 flex items-center gap-2 group transition-all shadow-sm">
                              <span>{t}</span>
                              <button 
@@ -1831,9 +1882,9 @@ export default function App() {
                                <X size={13}/>
                              </button>
                           </div>
-                        ))
-                      )}
-                   </div>
+                        ))}
+                     </div>
+                   )}
                 </div>
 
                 <div className="space-y-3">
@@ -2183,8 +2234,8 @@ export default function App() {
                       onChange={(e) => setSelectedTldFilter(e.target.value)}
                       className="bg-slate-950 px-3 py-2.5 rounded-xl border border-slate-800 outline-none text-xs font-bold text-white cursor-pointer hover:border-slate-700 transition-colors"
                     >
-                      <option value="all">Tất cả TLDs</option>
-                      {availableTlds.map(tld => (
+                      <option value="all">Tất cả TLDs ({displayedDomainTlds.length})</option>
+                      {displayedDomainTlds.map(tld => (
                         <option key={tld} value={tld}>{tld}</option>
                       ))}
                     </select>
